@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 from enum import Enum
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence
 
 from .dtypes import decoder_for
 from .reader import (
@@ -28,6 +28,24 @@ HEX_BYTES_PER_LINE = 16
 SORT_BY_OFFSET = "offset"
 SORT_BY_NAME = "name"
 SORT_ORDERS = (SORT_BY_OFFSET, SORT_BY_NAME)
+
+
+class Section(Enum):
+    """A selectable part of the dump.
+
+    `SUMMARY` covers the file at a glance: its layout, the integrity checks, and the
+    per-dtype totals. `METADATA` is the only member the command line cannot select on
+    its own, since --metadata prints the same content as JSON a pipeline can consume.
+    """
+
+    SUMMARY = "summary"
+    ISSUES = "issues"
+    METADATA = "metadata"
+    TENSORS = "tensors"
+    HEADER = "header"
+
+
+ALL_SECTIONS = frozenset(Section)
 
 _BINARY_UNITS = ("bytes", "KiB", "MiB", "GiB", "TiB", "PiB")
 
@@ -106,11 +124,11 @@ def render_table(headings: Sequence[str], rows: Sequence[Sequence[str]], right_a
 
 
 def pretty_header_json(header: Dict[str, Any]) -> str:
-    """The header re-serialized verbatim, with sorted keys and two-space indentation.
+    """A header or metadata object re-serialized verbatim, sorted, indented by two.
 
     Strictly valid JSON, byte-faithful to what the file holds. This is what
-    `--json-only` prints, and it is the escape hatch for anything that needs to
-    consume the header rather than read it.
+    `--metadata-raw` prints, and it is the escape hatch for anything that needs to
+    consume the file's own bytes rather than read them.
     """
     return json.dumps(header, indent=2, sort_keys=True, ensure_ascii=False)
 
@@ -481,21 +499,34 @@ def _render_gap(gap: Gap, segments: SegmentReader) -> Iterator[str]:
 
 
 def _render_raw_header(report: Report) -> Iterator[str]:
-    yield from section(
-        "HEADER JSON (pretty-printed, keys sorted; --json-only prints it verbatim)"
-    )
+    yield from section("HEADER JSON (pretty-printed, keys sorted)")
     yield from pretty_json_lines(report.header, ExpansionStyle.ANNOTATED)
 
 
-def render_report(report: Report, verbose: bool, sort_by: str = SORT_BY_OFFSET) -> Iterator[str]:
-    """Every line of the default (and, when `verbose`, the expanded) dump."""
-    yield from _render_file_section(report, verbose)
-    yield from _render_integrity_section(report)
-    yield from _render_issues_section(report)
-    yield from _render_metadata_section(report)
-    yield from _render_tensors_section(report, sort_by)
-    yield from _render_dtype_summary(report)
-    if verbose:
+def render_report(
+    report: Report,
+    sections: FrozenSet[Section],
+    verbose: bool,
+    sort_by: str = SORT_BY_OFFSET,
+) -> Iterator[str]:
+    """The selected sections of the dump, always in the order the full dump uses.
+
+    `verbose` adds the tensor detail, which belongs to `Section.TENSORS` and so is
+    withheld when the tensors were not selected.
+    """
+    if Section.SUMMARY in sections:
+        yield from _render_file_section(report, verbose)
+        yield from _render_integrity_section(report)
+    if Section.ISSUES in sections:
+        yield from _render_issues_section(report)
+    if Section.METADATA in sections:
+        yield from _render_metadata_section(report)
+    if Section.TENSORS in sections:
+        yield from _render_tensors_section(report, sort_by)
+    if Section.SUMMARY in sections:
+        yield from _render_dtype_summary(report)
+    if verbose and Section.TENSORS in sections:
         yield from _render_tensor_detail(report)
-    yield from _render_raw_header(report)
+    if Section.HEADER in sections:
+        yield from _render_raw_header(report)
     yield ""

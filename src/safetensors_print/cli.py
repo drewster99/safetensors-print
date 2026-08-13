@@ -5,13 +5,15 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Iterable, List, Optional, TextIO
+from typing import FrozenSet, Iterable, List, Optional, TextIO
 
 from . import __version__
 from .reader import METADATA_KEY, SafetensorsFormatError, read_report
 from .render import (
+    ALL_SECTIONS,
     SORT_BY_OFFSET,
     SORT_ORDERS,
+    Section,
     expanded_json_text,
     pretty_header_json,
     render_report,
@@ -22,17 +24,26 @@ EXIT_SPECIFICATION_VIOLATIONS = 1
 EXIT_USAGE = 2
 EXIT_UNREADABLE = 3
 
+# The command line flag that selects each section of the dump.
+_SECTION_FLAGS = {
+    "summary": Section.SUMMARY,
+    "issues": Section.ISSUES,
+    "tensors": Section.TENSORS,
+    "header": Section.HEADER,
+}
+
 _DESCRIPTION = """\
 Print everything a .safetensors file states about itself: the byte layout, the
 __metadata__ block, every tensor's dtype, shape and size, a map of the data
 buffer accounting for every byte, and the header JSON pretty-printed with
 sorted keys.
 
-The dump expands metadata values that themselves hold JSON, so they read as
-nested objects instead of one very long escaped line. --json-only and
---metadata print the file's verbatim JSON instead, for piping onward; add
---pretty to expand those values there too. --pretty output is still valid
-JSON, but it no longer reproduces the file byte for byte.
+With no section selected the whole dump is printed. --summary, --issues,
+--tensors and --header select parts of it, and combine.
+
+--metadata is the exception: it prints the __metadata__ block on its own as
+JSON a pipeline can consume, expanding values that themselves hold JSON.
+--metadata-raw prints the same block exactly as the file stores it.
 """
 
 _EPILOG = """\
@@ -50,45 +61,100 @@ def build_argument_parser() -> argparse.ArgumentParser:
         description=_DESCRIPTION,
         epilog=_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        # An unambiguous prefix such as --meta would be accepted by default, becoming an
+        # undocumented spelling that a later option could turn ambiguous and break.
+        allow_abbrev=False,
     )
     parser.add_argument("filename", help="path to the .safetensors file to inspect")
-    output_mode = parser.add_mutually_exclusive_group()
-    output_mode.add_argument(
-        "--verbose",
+    parser.add_argument(
+        "--summary",
         action="store_true",
-        help="add a TENSOR DETAIL section: decoded leading element values, hex dumps of the "
-        "head and tail of every data segment, and absolute file offsets",
-    )
-    output_mode.add_argument(
-        "--json-only",
-        action="store_true",
-        help="print only the header JSON, pretty-printed with sorted keys, verbatim",
-    )
-    output_mode.add_argument(
-        "--metadata",
-        action="store_true",
-        help="print only the __metadata__ object, pretty-printed with sorted keys, verbatim. "
-        "Prints {} when the file declares no metadata, and says so on stderr",
+        help="print the FILE, INTEGRITY and DTYPE SUMMARY sections: the layout, what the "
+        "header claims and whether it holds together, and the per-dtype totals",
     )
     parser.add_argument(
-        "--pretty",
+        "--issues",
         action="store_true",
-        help="with --metadata or --json-only: expand every value that itself holds a JSON "
-        "object or array, instead of printing it as a single escaped line. The output is "
-        "still valid JSON and still pipes, but it no longer reproduces the file: a value "
-        "stored as an encoded string comes out as the structure it holds. The default dump "
-        "already expands these values",
+        help="print the ISSUES section: every departure from the safetensors specification",
+    )
+    parser.add_argument(
+        "--tensors",
+        action="store_true",
+        help="print the TENSORS table: one row per tensor, plus any unclaimed gap when "
+        "ordered by offset",
+    )
+    parser.add_argument(
+        "--header",
+        action="store_true",
+        help="print the HEADER JSON section: the whole header pretty-printed with sorted "
+        "keys, with JSON-encoded values expanded and annotated",
+    )
+
+    metadata_form = parser.add_mutually_exclusive_group()
+    metadata_form.add_argument(
+        "--metadata",
+        action="store_true",
+        help="print only the __metadata__ object, as JSON with sorted keys, expanding every "
+        "value that itself holds a JSON object or array. Still valid JSON, so it pipes, but "
+        "no longer byte-faithful. Prints {} when the file declares no metadata, and says so "
+        "on stderr",
+    )
+    metadata_form.add_argument(
+        "--metadata-raw",
+        action="store_true",
+        help="as --metadata, but byte-faithful: a value the file stores as a JSON-encoded "
+        "string is printed as that string, escaping and all",
+    )
+
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="add a TENSOR DETAIL section to the tensors output: decoded leading element "
+        "values, hex dumps of the head and tail of every data segment, and absolute file "
+        "offsets",
     )
     parser.add_argument(
         "--sort",
         choices=SORT_ORDERS,
         default=SORT_BY_OFFSET,
         help="order of the TENSORS table: 'offset' (default) lays out the data buffer and "
-        "shows any unclaimed gaps in place; 'name' sorts alphabetically. Ignored with "
-        "--json-only and --metadata",
+        "shows any unclaimed gaps in place; 'name' sorts alphabetically",
     )
     parser.add_argument("--version", action="version", version="%(prog)s {}".format(__version__))
     return parser
+
+
+def _selected_sections(arguments: argparse.Namespace) -> FrozenSet[Section]:
+    """The sections named on the command line, or every one when none was named."""
+    selected = frozenset(
+        section for flag, section in _SECTION_FLAGS.items() if getattr(arguments, flag)
+    )
+    return selected if selected else ALL_SECTIONS
+
+
+def _reject_unusable_combinations(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
+    """Refuse flag combinations under which a flag would do nothing.
+
+    Accepting them silently would leave the user believing the ignored flag had taken
+    effect, which is worse than being told the combination is not one we serve.
+    """
+    named_sections = ["--" + flag for flag in _SECTION_FLAGS if getattr(arguments, flag)]
+
+    if not (arguments.metadata or arguments.metadata_raw):
+        if arguments.verbose and named_sections and not arguments.tensors:
+            parser.error(
+                "--verbose adds detail to the tensors output; add --tensors, or select no sections"
+            )
+        return
+
+    conflicting = named_sections + (["--verbose"] if arguments.verbose else [])
+    if conflicting:
+        parser.error(
+            "{} prints the metadata on its own and cannot be combined with {}".format(
+                "--metadata-raw" if arguments.metadata_raw else "--metadata",
+                ", ".join(conflicting),
+            )
+        )
 
 
 def _write_lines(lines: Iterable[str], stream: TextIO) -> None:
@@ -106,14 +172,7 @@ def _write_lines(lines: Iterable[str], stream: TextIO) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_argument_parser()
     arguments = parser.parse_args(argv)
-
-    # Silently ignoring --pretty on the default dump would suggest the dump had been
-    # left unexpanded without it, which is the opposite of what happens.
-    if arguments.pretty and not (arguments.metadata or arguments.json_only):
-        parser.error(
-            "--pretty applies to --metadata and --json-only; the default dump always "
-            "expands JSON-encoded values"
-        )
+    _reject_unusable_combinations(parser, arguments)
 
     try:
         report = read_report(arguments.filename)
@@ -127,20 +186,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return EXIT_UNREADABLE
 
-    render_json = expanded_json_text if arguments.pretty else pretty_header_json
-
-    if arguments.metadata:
+    if arguments.metadata or arguments.metadata_raw:
         if METADATA_KEY not in report.header:
             print(
                 "safetensors-print: {} declares no {} key".format(arguments.filename, METADATA_KEY),
                 file=sys.stderr,
             )
-        _write_lines([render_json(report.metadata)], sys.stdout)
-    elif arguments.json_only:
-        _write_lines([render_json(report.header)], sys.stdout)
+        render_metadata = pretty_header_json if arguments.metadata_raw else expanded_json_text
+        _write_lines([render_metadata(report.metadata)], sys.stdout)
     else:
         _write_lines(
-            render_report(report, verbose=arguments.verbose, sort_by=arguments.sort), sys.stdout
+            render_report(
+                report,
+                sections=_selected_sections(arguments),
+                verbose=arguments.verbose,
+                sort_by=arguments.sort,
+            ),
+            sys.stdout,
         )
 
     return EXIT_SPECIFICATION_VIOLATIONS if report.has_errors else EXIT_OK

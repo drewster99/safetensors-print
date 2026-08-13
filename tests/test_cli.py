@@ -71,35 +71,14 @@ def test_default_run_embeds_the_header_with_sorted_keys(valid_file, capsys):
     assert header_section.index('"__metadata__"') < header_section.index('"weight"')
 
 
-def test_only_json_only_prints_the_header_verbatim(valid_file, capsys):
-    """The dump expands JSON-encoded values for reading; --json-only stays byte-faithful."""
-    main([valid_file])
-    dump = capsys.readouterr().out
-
-    main([valid_file, "--json-only"])
-    verbatim = capsys.readouterr().out
-
-    assert verbatim.strip() == json.dumps(VALID_HEADER, indent=2, sort_keys=True)
-    assert '{\\"layers\\": 2}' in verbatim
-    assert '{\\"layers\\": 2}' not in dump
-
-
-def test_json_only_prints_nothing_but_the_header(valid_file, capsys):
-    assert main([valid_file, "--json-only"]) == EXIT_OK
-
-    output = capsys.readouterr().out
-    assert json.loads(output) == VALID_HEADER
-    assert "INTEGRITY" not in output
-
-
-def test_json_only_sorts_keys(tmp_path, capsys):
+def test_header_section_sorts_keys(tmp_path, capsys):
     header = {
         "zebra": {"dtype": "U8", "shape": [1], "data_offsets": [1, 2]},
         "alpha": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(2)))
 
-    main([path, "--json-only"])
+    main([path, "--header"])
 
     output = capsys.readouterr().out
     assert output.index('"alpha"') < output.index('"zebra"')
@@ -219,12 +198,22 @@ def test_unparsable_header_reports_an_error_on_stderr(tmp_path, capsys):
     assert "too short" in capsys.readouterr().err
 
 
-def test_verbose_and_json_only_are_mutually_exclusive(valid_file, capsys):
+@pytest.mark.parametrize("withdrawn", ["--json-only", "--pretty"])
+def test_withdrawn_options_are_rejected(valid_file, capsys, withdrawn):
     with pytest.raises(SystemExit) as raised:
-        main([valid_file, "--verbose", "--json-only"])
+        main([valid_file, withdrawn])
 
     assert raised.value.code == EXIT_USAGE
-    assert "not allowed with" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("abbreviation", ["--met", "--metadata-r", "--verb", "--so", "--tens"])
+def test_abbreviated_options_are_rejected(valid_file, capsys, abbreviation):
+    """A prefix that works today would break the day a longer option makes it ambiguous."""
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, abbreviation])
+
+    assert raised.value.code == EXIT_USAGE
+    assert "unrecognized arguments" in capsys.readouterr().err
 
 
 def test_missing_filename_is_a_usage_error(capsys):
@@ -240,9 +229,8 @@ def test_help_lists_the_documented_options(capsys):
 
     assert raised.value.code == EXIT_OK
     output = capsys.readouterr().out
-    assert "--verbose" in output
-    assert "--json-only" in output
-    assert "--pretty" in output
+    for option in ("--verbose", "--summary", "--issues", "--tensors", "--header", "--metadata-raw"):
+        assert option in output
     assert "exit codes:" in output
 
 
@@ -342,124 +330,193 @@ def test_metadata_flag_prints_only_the_metadata_object(valid_file, capsys):
     assert main([valid_file, "--metadata"]) == EXIT_OK
 
     output = capsys.readouterr().out
-    assert json.loads(output) == VALID_HEADER["__metadata__"]
     assert "INTEGRITY" not in output
     assert "weight" not in output
 
 
-def test_metadata_flag_output_is_verbatim_and_sorted(valid_file, capsys):
-    """It must stay strictly valid JSON so it can be piped onward."""
+def test_metadata_expands_encoded_values_by_default(valid_file, capsys):
+    main([valid_file, "--metadata"])
+
+    assert json.loads(capsys.readouterr().out) == {"format": "pt", "config": {"layers": 2}}
+
+
+def test_metadata_output_is_valid_json_and_sorted(valid_file, capsys):
+    """Expansion must not cost the output its parsability, so no annotating comments."""
     main([valid_file, "--metadata"])
 
     output = capsys.readouterr().out
-    assert output.strip() == json.dumps(VALID_HEADER["__metadata__"], indent=2, sort_keys=True)
-    assert output.index('"config"') < output.index('"format"')
+    json.loads(output)
     assert "/*" not in output
+    assert "shown decoded" not in output
+    assert output.index('"config"') < output.index('"format"')
 
 
-def test_metadata_flag_on_a_file_without_metadata_prints_an_empty_object(tmp_path, capsys):
-    header = {"w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}
-    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
-
-    assert main([path, "--metadata"]) == EXIT_OK
-
-    captured = capsys.readouterr()
-    assert json.loads(captured.out) == {}
-    assert "declares no __metadata__ key" in captured.err
-
-
-def test_metadata_flag_is_mutually_exclusive_with_the_other_output_modes(valid_file, capsys):
-    for conflicting in ("--verbose", "--json-only"):
-        with pytest.raises(SystemExit) as raised:
-            main([valid_file, "--metadata", conflicting])
-        assert raised.value.code == EXIT_USAGE
-
-
-def test_pretty_expands_encoded_metadata_values(valid_file, capsys):
-    assert main([valid_file, "--metadata", "--pretty"]) == EXIT_OK
+def test_metadata_raw_is_byte_faithful(valid_file, capsys):
+    assert main([valid_file, "--metadata-raw"]) == EXIT_OK
 
     output = capsys.readouterr().out
-    assert json.loads(output) == {"format": "pt", "config": {"layers": 2}}
-    assert "INTEGRITY" not in output
+    assert output.strip() == json.dumps(VALID_HEADER["__metadata__"], indent=2, sort_keys=True)
+    assert json.loads(output)["config"] == '{"layers": 2}'
 
 
-def test_pretty_output_is_still_valid_json(valid_file, capsys):
-    """Expansion must not cost the output its parsability, so no annotating comments."""
-    for mode in ("--metadata", "--json-only"):
-        main([valid_file, mode, "--pretty"])
-
-        output = capsys.readouterr().out
-        json.loads(output)
-        assert "/*" not in output
-        assert "shown decoded" not in output
-
-
-def test_pretty_leaves_values_that_are_not_encoded_json_alone(tmp_path, capsys):
+def test_metadata_leaves_values_that_are_not_encoded_json_alone(tmp_path, capsys):
     header = {
         "__metadata__": {"training_step": "5000", "notes": "autosave @ step 5000"},
         "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
 
-    assert main([path, "--metadata", "--pretty"]) == EXIT_OK
+    assert main([path, "--metadata"]) == EXIT_OK
 
-    output = capsys.readouterr().out
-    assert json.loads(output) == header["__metadata__"]
-
-
-def test_pretty_expands_encoded_values_under_json_only_too(valid_file, capsys):
-    assert main([valid_file, "--json-only", "--pretty"]) == EXIT_OK
-
-    parsed = json.loads(capsys.readouterr().out)
-    assert parsed["__metadata__"]["config"] == {"layers": 2}
-    assert parsed["weight"] == VALID_HEADER["weight"]
+    assert json.loads(capsys.readouterr().out) == header["__metadata__"]
 
 
-def test_pretty_without_metadata_or_json_only_is_a_usage_error(valid_file, capsys):
-    with pytest.raises(SystemExit) as raised:
-        main([valid_file, "--pretty"])
-
-    assert raised.value.code == EXIT_USAGE
-    assert "--pretty applies to" in capsys.readouterr().err
-
-
-def test_pretty_is_rejected_before_the_file_is_read(tmp_path, capsys):
-    """The usage error must not depend on the file existing."""
-    with pytest.raises(SystemExit) as raised:
-        main([str(tmp_path / "absent.safetensors"), "--pretty"])
-
-    assert raised.value.code == EXIT_USAGE
-
-
-def test_pretty_metadata_still_reports_violations_in_its_exit_code(file_with_a_gap, capsys):
-    assert main([file_with_a_gap, "--metadata", "--pretty"]) == EXIT_SPECIFICATION_VIOLATIONS
-
-
-def test_pretty_on_a_file_without_metadata_prints_an_empty_object(tmp_path, capsys):
+@pytest.mark.parametrize("form", ["--metadata", "--metadata-raw"])
+def test_either_metadata_form_on_a_file_without_metadata_prints_an_empty_object(
+    tmp_path, capsys, form
+):
     header = {"w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
 
-    assert main([path, "--metadata", "--pretty"]) == EXIT_OK
+    assert main([path, form]) == EXIT_OK
 
     captured = capsys.readouterr()
-    assert captured.out.strip() == "{}"
+    assert json.loads(captured.out) == {}
     assert "declares no __metadata__ key" in captured.err
 
 
-def test_metadata_without_pretty_stays_byte_faithful(valid_file, capsys):
-    """--pretty is the only thing that turns an encoded string into structure."""
-    main([valid_file, "--metadata"])
+def test_the_two_metadata_forms_are_mutually_exclusive(valid_file, capsys):
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, "--metadata", "--metadata-raw"])
 
-    assert json.loads(capsys.readouterr().out)["config"] == '{"layers": 2}'
+    assert raised.value.code == EXIT_USAGE
+    assert "not allowed with" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("form", ["--metadata", "--metadata-raw"])
+@pytest.mark.parametrize("conflicting", ["--verbose", "--tensors", "--summary", "--header"])
+def test_metadata_cannot_be_combined_with_sections(valid_file, capsys, form, conflicting):
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, form, conflicting])
+
+    assert raised.value.code == EXIT_USAGE
+    assert "cannot be combined with" in capsys.readouterr().err
+
+
+def test_metadata_is_rejected_before_the_file_is_read(tmp_path, capsys):
+    """A usage error must not depend on the file existing."""
+    with pytest.raises(SystemExit) as raised:
+        main([str(tmp_path / "absent.safetensors"), "--metadata", "--tensors"])
+
+    assert raised.value.code == EXIT_USAGE
 
 
 def test_the_annotating_comment_belongs_to_the_dump_only(valid_file, capsys):
-    """The dump is prose and can say how a value is stored; the JSON modes cannot."""
+    """The dump is prose and can say how a value is stored; the JSON output cannot."""
     main([valid_file])
     assert "shown decoded" in capsys.readouterr().out
 
-    main([valid_file, "--metadata", "--pretty"])
+    main([valid_file, "--metadata"])
     assert "shown decoded" not in capsys.readouterr().out
+
+
+def section_titles(output):
+    """The title of each section printed, read from between its two rules.
+
+    Titles are compared rather than substrings of the whole dump, since a table can
+    hold a column named after another section.
+    """
+    rule = "=" * RULE_WIDTH
+    lines = output.splitlines()
+    return [
+        line.split(" (")[0]
+        for index, line in enumerate(lines)
+        if 0 < index < len(lines) - 1 and lines[index - 1] == rule and lines[index + 1] == rule
+    ]
+
+
+SECTION_TITLES = {
+    "--summary": ["FILE", "INTEGRITY", "DTYPE SUMMARY"],
+    "--issues": ["ISSUES"],
+    "--tensors": ["TENSORS"],
+    "--header": ["HEADER JSON"],
+}
+
+
+@pytest.mark.parametrize("flag", sorted(SECTION_TITLES))
+def test_a_section_flag_prints_that_section_and_no_other(valid_file, capsys, flag):
+    assert main([valid_file, flag]) == EXIT_OK
+
+    assert section_titles(capsys.readouterr().out) == SECTION_TITLES[flag]
+
+
+def test_section_flags_combine(valid_file, capsys):
+    assert main([valid_file, "--summary", "--tensors"]) == EXIT_OK
+
+    assert section_titles(capsys.readouterr().out) == ["FILE", "INTEGRITY", "TENSORS", "DTYPE SUMMARY"]
+
+
+def test_combined_sections_keep_the_order_of_the_full_dump(valid_file, capsys):
+    """Flag order must not reorder the output; the dump has one canonical order."""
+    main([valid_file, "--header", "--issues", "--tensors", "--summary"])
+    one_order = capsys.readouterr().out
+
+    main([valid_file, "--summary", "--tensors", "--issues", "--header"])
+    assert capsys.readouterr().out == one_order
+    assert section_titles(one_order) == [
+        "FILE",
+        "INTEGRITY",
+        "ISSUES",
+        "TENSORS",
+        "DTYPE SUMMARY",
+        "HEADER JSON",
+    ]
+
+
+def test_no_section_flag_prints_every_section(valid_file, capsys):
+    main([valid_file])
+
+    assert section_titles(capsys.readouterr().out) == [
+        "FILE",
+        "INTEGRITY",
+        "ISSUES",
+        "__METADATA__",
+        "TENSORS",
+        "DTYPE SUMMARY",
+        "HEADER JSON",
+    ]
+
+
+def test_verbose_narrows_to_the_selected_sections(valid_file, capsys):
+    assert main([valid_file, "--tensors", "--verbose"]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    assert section_titles(output) == ["TENSORS", "TENSOR DETAIL"]
+    assert "first elements" in output
+
+
+def test_verbose_is_rejected_when_the_tensors_are_not_selected(valid_file, capsys):
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, "--summary", "--verbose"])
+
+    assert raised.value.code == EXIT_USAGE
+    assert "--verbose adds detail to the tensors output" in capsys.readouterr().err
+
+
+def test_sort_applies_to_a_lone_tensors_section(file_with_a_gap, capsys):
+    main([file_with_a_gap, "--tensors", "--sort", "name"])
+    assert "-- unclaimed gap --" not in capsys.readouterr().out
+
+    main([file_with_a_gap, "--tensors", "--sort", "offset"])
+    assert "-- unclaimed gap --" in capsys.readouterr().out
+
+
+def test_a_section_flag_still_reports_violations_in_its_exit_code(file_with_a_gap, capsys):
+    assert main([file_with_a_gap, "--summary"]) == EXIT_SPECIFICATION_VIOLATIONS
+
+
+def test_metadata_reports_violations_in_its_exit_code(file_with_a_gap, capsys):
+    assert main([file_with_a_gap, "--metadata"]) == EXIT_SPECIFICATION_VIOLATIONS
 
 
 def test_metadata_flag_reports_specification_violations_in_its_exit_code(tmp_path, capsys):

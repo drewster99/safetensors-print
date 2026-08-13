@@ -22,43 +22,64 @@ python3 -m safetensors_print model.safetensors
 ## Usage
 
 ```
-safetensors-print <filename.safetensors> [--verbose | --json-only | --metadata] [--pretty] [--sort offset|name]
+safetensors-print <filename.safetensors> [--summary] [--issues] [--tensors] [--header]
+                  [--verbose] [--sort offset|name]
+safetensors-print <filename.safetensors> (--metadata | --metadata-raw)
 ```
 
 | Option | Effect |
 | --- | --- |
-| *(none)* | Full dump: file layout, integrity checks, issues, metadata, tensor table, dtype summary, header JSON |
-| `--verbose` | Adds a `TENSOR DETAIL` section: decoded leading element values, hex dumps of the head and tail of every segment, and absolute file offsets |
+| *(none)* | Full dump: every section below, plus `__METADATA__` |
+| `--summary` | `FILE`, `INTEGRITY` and `DTYPE SUMMARY`: the layout, whether the header holds together, and the per-dtype totals |
+| `--issues` | `ISSUES`: every departure from the specification |
+| `--tensors` | `TENSORS`: one row per tensor, plus any unclaimed gap |
+| `--header` | `HEADER JSON`: the whole header, keys sorted, encoded values expanded and annotated |
+| `--verbose` | Adds `TENSOR DETAIL` to the tensors output: decoded leading element values, hex dumps of the head and tail of every segment, and absolute file offsets |
 | `--sort offset\|name` | Order of the `TENSORS` table. `offset` (default) lays out the data buffer and shows unclaimed gaps in place; `name` sorts alphabetically |
-| `--json-only` | Prints only the header JSON, pretty-printed with sorted keys, verbatim |
-| `--metadata` | Prints only the `__metadata__` object, pretty-printed with sorted keys, verbatim |
-| `--pretty` | With `--json-only` or `--metadata`: expands values that themselves hold JSON, still emitting valid JSON |
+| `--metadata` | Prints only `__metadata__`, as JSON, with encoded values expanded |
+| `--metadata-raw` | Prints only `__metadata__`, as JSON, exactly as the file stores it |
 | `--version` | Prints the version |
 | `--help` | Usage |
 
-`--verbose`, `--json-only` and `--metadata` are mutually exclusive.
+Option abbreviations are not accepted: `--met` is an error, not a shorthand for
+`--metadata`. A prefix that works today would break the day a longer option makes it
+ambiguous.
 
-`--json-only` and `--metadata` emit strictly valid JSON, byte-faithful to the file, so
-they pipe cleanly:
+### Selecting sections
+
+The four section flags combine, and the output always follows the order of the full
+dump regardless of the order they are given in:
 
 ```sh
-safetensors-print model.safetensors --metadata | jq .training_step
+safetensors-print model.safetensors --summary --issues
 ```
 
-`--metadata` prints `{}` and notes it on stderr when the file declares no metadata, so
-a pipeline never receives empty input.
+`--verbose` belongs to the tensors output, so it is rejected alongside a selection that
+excludes `--tensors`, rather than being silently ignored.
 
-`--pretty` gives those two modes the expansion the dump performs, so a configuration
-stored as an encoded string can be queried as structure:
+### Reading the metadata
+
+`--metadata` and `--metadata-raw` print the `__metadata__` block on its own, as JSON a
+pipeline can consume. They cannot be combined with the section flags.
+
+`--metadata` expands values that themselves hold JSON, so a configuration stored as an
+encoded string can be queried as structure:
 
 ```sh
-safetensors-print model.safetensors --metadata --pretty | jq .architecture.input_encoding
+safetensors-print model.safetensors --metadata | jq .architecture.input_encoding
 ```
 
 The output is still valid JSON; what it gives up is byte-faithfulness, since a value the
 file holds as a string comes out as the object that string contains. It carries no
-annotating comment for exactly that reason. `--pretty` is rejected on the default dump,
-which always expands.
+annotating comment for exactly that reason. `--metadata-raw` is the byte-faithful form,
+reproducing what the file holds:
+
+```sh
+safetensors-print model.safetensors --metadata-raw | jq -r .architecture | jq .
+```
+
+Both print `{}` and note it on stderr when the file declares no metadata, so a pipeline
+never receives empty input.
 
 The `TENSORS` table is the only listing of tensors. Ordered by offset it doubles as the
 map of the data buffer, with any unclaimed gaps shown in place, so no tensor is ever
@@ -71,9 +92,8 @@ are expanded in place and annotated `/* stored as a JSON-encoded string, shown d
 */`, rather than printed as a single escaped line hundreds of characters wide.
 Numeric-looking values such as `"5000"` are strings in the file and stay strings.
 
-That annotation makes the dump readable but not machine-parsable. `--json-only` and
-`--metadata` print the verbatim JSON for that, and `--pretty` expands without annotating,
-which stays parsable.
+That annotation makes the dump readable but not machine-parsable, which is why
+`--metadata` and `--metadata-raw` expand without annotating.
 
 ### Exit codes
 
