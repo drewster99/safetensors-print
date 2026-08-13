@@ -188,6 +188,17 @@ python3 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
+## Releasing
+
+Publishing to PyPI runs from `.github/workflows/publish.yml` using trusted publishing,
+so no API token is stored here. It needs a one-time pending publisher configured on
+PyPI (owner `drewster99`, repository `safetensors-print`, workflow `publish.yml`,
+environment `pypi`).
+
+After that, a release is: bump `__version__` in `src/safetensors_print/__init__.py`,
+tag `vX.Y.Z`, and publish a GitHub release. The workflow runs the suite on 3.9 and
+3.13, builds, verifies the tag matches the packaged version, and uploads.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
