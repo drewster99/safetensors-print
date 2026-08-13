@@ -263,7 +263,7 @@ The corpus has three parts:
 
 | Part | Contents |
 | --- | --- |
-| `tests/corpus/synthetic/` | 31 files written by `scripts/make-synthetic-corpus.py`: one tensor of every defined dtype, every violation the reader reports, and every way a header can be unreadable. Rebuilt each run |
+| `tests/corpus/synthetic/` | 34 files written by `scripts/make-synthetic-corpus.py`: one tensor of every defined dtype, every violation the reader reports, every way a header can be unreadable, and metadata that forges the renderer's own internal marker. Rebuilt each run |
 | `tests/corpus/third-party/` | Models from other people's tools, fetched by `scripts/fetch-test-corpus.sh`: transformers, a PEFT adapter, sentence-transformers, diffusers, and a 4-bit MLX quantisation |
 | `tests/corpus/local/` | Whatever you put there, symlinks included. Skipped if empty |
 

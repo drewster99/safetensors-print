@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 from enum import Enum
-from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence
+from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tuple
 
 from .dtypes import decoder_for
 from .reader import (
@@ -148,13 +148,48 @@ class ExpansionStyle(Enum):
 _EXPANSION_PREFIX = "safetensors-print-expansion:"
 _EXPANSION_NOTE = "  /* stored as a JSON-encoded string, shown decoded */"
 
-# json.dumps escapes NUL even with ensure_ascii=False, so a NUL-delimited marker
-# survives serialization as a predictable literal and cannot collide with real data.
-_EXPANSION_LINE = re.compile(
-    r'^(?P<head>\s*(?:"(?:[^"\\]|\\.)*"\s*:\s*)?)'
-    r'"\\u0000' + _EXPANSION_PREFIX + r'(?P<index>\d+)\\u0000"'
-    r"(?P<tail>,?)$"
-)
+
+def _expansion_line_pattern(prefix: str) -> "re.Pattern":
+    """Matches a line holding nothing but one marker, optionally behind its key.
+
+    json.dumps escapes NUL as `\\u0000` even with ensure_ascii=False, so a NUL-delimited
+    marker survives serialization as a predictable literal.
+    """
+    return re.compile(
+        r'^(?P<head>\s*(?:"(?:[^"\\]|\\.)*"\s*:\s*)?)'
+        r'"\\u0000' + re.escape(prefix) + r'(?P<index>\d+)\\u0000"'
+        r"(?P<tail>,?)$"
+    )
+
+
+def _substitute_encoded_json(value: Any, prefix: str) -> Tuple[Any, List[Any], int]:
+    """`value` with each JSON-holding string swapped for a marker.
+
+    The third result is how many `-` the file's own strings manage to append directly
+    after `prefix`, or -1 if none of them contain it at all. That is what it takes to
+    choose a prefix the file cannot spell, since a string may hold any text we might
+    have picked, NUL included.
+    """
+    expansions: List[Any] = []
+    forgery = re.compile(re.escape(prefix) + "(-*)")
+    longest_forgery = -1
+
+    def substitute(node: Any) -> Any:
+        nonlocal longest_forgery
+        if isinstance(node, dict):
+            return {key: substitute(item) for key, item in node.items()}
+        if isinstance(node, list):
+            return [substitute(item) for item in node]
+        if isinstance(node, str):
+            for dashes in forgery.findall(node):
+                longest_forgery = max(longest_forgery, len(dashes))
+            decoded = _decoded_json_value(node)
+            if decoded is not None:
+                expansions.append(decoded)
+                return "\x00{}{}\x00".format(prefix, len(expansions) - 1)
+        return node
+
+    return substitute(value), expansions, longest_forgery
 
 
 def pretty_json_lines(value: Any, style: ExpansionStyle) -> Iterator[str]:
@@ -166,25 +201,22 @@ def pretty_json_lines(value: Any, style: ExpansionStyle) -> Iterator[str]:
     byte-faithful: what the file holds as a string is shown as structure, and
     `pretty_header_json` is the form that reproduces the file.
     """
-    expansions: List[Any] = []
-
-    def substitute(node: Any) -> Any:
-        if isinstance(node, dict):
-            return {key: substitute(item) for key, item in node.items()}
-        if isinstance(node, list):
-            return [substitute(item) for item in node]
-        if isinstance(node, str):
-            decoded = _decoded_json_value(node)
-            if decoded is not None:
-                expansions.append(decoded)
-                return "\x00{}{}\x00".format(_EXPANSION_PREFIX, len(expansions) - 1)
-        return node
+    # A file may legally contain the marker text: a JSON string can hold anything, NUL
+    # included, and a marker the file can spell would be rendered as someone else's
+    # value. One more `-` than the file manages is a prefix it cannot have spelled, so
+    # this settles in a second pass however hostile the file is.
+    prefix = _EXPANSION_PREFIX
+    substituted, expansions, longest_forgery = _substitute_encoded_json(value, prefix)
+    if longest_forgery >= 0:
+        prefix += "-" * (longest_forgery + 1)
+        substituted, expansions, _ = _substitute_encoded_json(value, prefix)
 
     note = _EXPANSION_NOTE if style is ExpansionStyle.ANNOTATED else ""
-    serialized = json.dumps(substitute(value), indent=2, sort_keys=True, ensure_ascii=False)
+    pattern = _expansion_line_pattern(prefix)
+    serialized = json.dumps(substituted, indent=2, sort_keys=True, ensure_ascii=False)
 
     for line in serialized.splitlines():
-        match = _EXPANSION_LINE.match(line)
+        match = pattern.match(line)
         if match is None:
             yield line
             continue

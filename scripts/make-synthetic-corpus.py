@@ -96,6 +96,25 @@ def deeply_encoded() -> bytes:
     return file_bytes(header, bytes(8))
 
 
+def forged_expansion_markers() -> bytes:
+    """Metadata spelling out the renderer's own internal marker.
+
+    A JSON string may hold any character, NUL included, so nothing stops a file from
+    containing whatever text the renderer uses to keep its place.
+    """
+    marker = "\x00safetensors-print-expansion:{}\x00"
+    header = {
+        "__metadata__": {
+            "forged_first": marker.format(0),
+            "forged_past_the_end": marker.format(9999),
+            "forged_inside_encoded": json.dumps({"nested": marker.format(0)}),
+            "real": json.dumps({"a": 1}),
+        },
+        "w": entry("F32", [2], 0, 8),
+    }
+    return file_bytes(header, bytes(8))
+
+
 def unicode_metadata() -> bytes:
     header = {
         "__metadata__": {
@@ -139,6 +158,7 @@ CASES = {
     ),
     "conforming-every-dtype": every_dtype,
     "conforming-encoded-metadata": deeply_encoded,
+    "conforming-forged-markers": forged_expansion_markers,
     "conforming-unicode-metadata": unicode_metadata,
     "conforming-many-tensors": wide_and_deep,
     "conforming-padded-header": lambda: file_bytes(

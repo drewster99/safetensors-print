@@ -471,6 +471,43 @@ def test_metadata_is_rejected_before_the_file_is_read(tmp_path, capsys):
     assert raised.value.code == EXIT_USAGE
 
 
+FORGED_MARKER = "\x00safetensors-print-expansion:{}\x00"
+
+
+@pytest.mark.parametrize("index", [0, 1, 99])
+def test_a_value_forging_the_renderer_s_marker_is_printed_as_itself(tmp_path, capsys, index):
+    """A JSON string may hold anything, NUL included, so a file can spell the marker.
+
+    Rendering such a value as whatever expansion it points at would make the tool
+    misreport the file's contents, and pointing past the end would crash it.
+    """
+    header = {
+        "__metadata__": {"forged": FORGED_MARKER.format(index), "real": '{"a": 1}'},
+        "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    assert main([path, "--metadata"]) == EXIT_OK
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["forged"] == FORGED_MARKER.format(index)
+    assert printed["real"] == {"a": 1}
+
+
+def test_a_forged_marker_does_not_stop_the_dump_expanding_real_values(tmp_path, capsys):
+    header = {
+        "__metadata__": {"forged": FORGED_MARKER.format(0), "real": '{"a": 1}'},
+        "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    assert main([path]) == EXIT_OK
+
+    metadata_section = capsys.readouterr().out.split("__METADATA__")[1].split("TENSORS")[0]
+    assert "shown decoded" in metadata_section
+    assert '"a": 1' in metadata_section
+
+
 def test_the_annotating_comment_belongs_to_the_dump_only(valid_file, capsys):
     """The dump is prose and can say how a value is stored; the JSON output cannot."""
     main([valid_file])
