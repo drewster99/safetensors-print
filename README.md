@@ -22,7 +22,7 @@ python3 -m safetensors_print model.safetensors
 ## Usage
 
 ```
-safetensors-print <filename.safetensors> [--verbose | --json-only | --metadata] [--sort offset|name]
+safetensors-print <filename.safetensors> [--verbose | --json-only | --metadata] [--pretty] [--sort offset|name]
 ```
 
 | Option | Effect |
@@ -32,6 +32,7 @@ safetensors-print <filename.safetensors> [--verbose | --json-only | --metadata] 
 | `--sort offset\|name` | Order of the `TENSORS` table. `offset` (default) lays out the data buffer and shows unclaimed gaps in place; `name` sorts alphabetically |
 | `--json-only` | Prints only the header JSON, pretty-printed with sorted keys, verbatim |
 | `--metadata` | Prints only the `__metadata__` object, pretty-printed with sorted keys, verbatim |
+| `--pretty` | With `--json-only` or `--metadata`: expands values that themselves hold JSON, for reading rather than piping |
 | `--version` | Prints the version |
 | `--help` | Usage |
 
@@ -47,19 +48,27 @@ safetensors-print model.safetensors --metadata | jq .training_step
 `--metadata` prints `{}` and notes it on stderr when the file declares no metadata, so
 a pipeline never receives empty input.
 
+`--pretty` trades that byte-faithfulness for readability, giving `--metadata` and
+`--json-only` the same expansion the dump performs. It is rejected on the default dump,
+which always expands.
+
+```sh
+safetensors-print model.safetensors --metadata --pretty
+```
+
 The `TENSORS` table is the only listing of tensors. Ordered by offset it doubles as the
 map of the data buffer, with any unclaimed gaps shown in place, so no tensor is ever
 printed twice.
 
 The `__METADATA__` and `HEADER JSON` sections of the dump both print as JSON with keys
-sorted. The format permits only string values, so model configurations are routinely
-stored as JSON-encoded strings; in the dump those are expanded in place and annotated
-`/* stored as a JSON-encoded string, shown decoded */`, rather than printed as a single
-escaped line hundreds of characters wide. Numeric-looking values such as `"5000"` are
-strings in the file and stay strings.
+sorted. The specification defines `__metadata__` as a flat map of string to string, so a
+model configuration has nowhere to go but into a JSON-encoded string; in the dump those
+are expanded in place and annotated `/* stored as a JSON-encoded string, shown decoded
+*/`, rather than printed as a single escaped line hundreds of characters wide.
+Numeric-looking values such as `"5000"` are strings in the file and stay strings.
 
 That expansion makes the dump readable but not machine-parsable. `--json-only` and
-`--metadata` print the verbatim JSON for that.
+`--metadata` print the verbatim JSON for that; `--pretty` opts them into the expansion.
 
 ### Exit codes
 

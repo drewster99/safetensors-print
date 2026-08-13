@@ -9,7 +9,13 @@ from typing import Iterable, List, Optional, TextIO
 
 from . import __version__
 from .reader import METADATA_KEY, SafetensorsFormatError, read_report
-from .render import SORT_BY_OFFSET, SORT_ORDERS, pretty_header_json, render_report
+from .render import (
+    SORT_BY_OFFSET,
+    SORT_ORDERS,
+    expanded_json_text,
+    pretty_header_json,
+    render_report,
+)
 
 EXIT_OK = 0
 EXIT_SPECIFICATION_VIOLATIONS = 1
@@ -24,7 +30,8 @@ sorted keys.
 
 The dump expands metadata values that themselves hold JSON, so they read as
 nested objects instead of one very long escaped line. --json-only and
---metadata print the file's verbatim JSON instead, for piping onward.
+--metadata print the file's verbatim JSON instead, for piping onward; add
+--pretty to expand those values there too, for reading rather than piping.
 """
 
 _EPILOG = """\
@@ -63,6 +70,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "Prints {} when the file declares no metadata, and says so on stderr",
     )
     parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="with --metadata or --json-only: expand every value that itself holds a JSON "
+        "object or array, annotating each one, instead of printing it as a single escaped "
+        "line. The output reads well but is no longer valid JSON, so it cannot be piped "
+        "into a JSON consumer. The default dump already expands these values",
+    )
+    parser.add_argument(
         "--sort",
         choices=SORT_ORDERS,
         default=SORT_BY_OFFSET,
@@ -90,6 +105,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_argument_parser()
     arguments = parser.parse_args(argv)
 
+    # Silently ignoring --pretty on the default dump would suggest the dump had been
+    # left unexpanded without it, which is the opposite of what happens.
+    if arguments.pretty and not (arguments.metadata or arguments.json_only):
+        parser.error(
+            "--pretty applies to --metadata and --json-only; the default dump always "
+            "expands JSON-encoded values"
+        )
+
     try:
         report = read_report(arguments.filename)
     except SafetensorsFormatError as error:
@@ -102,15 +125,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return EXIT_UNREADABLE
 
+    render_json = expanded_json_text if arguments.pretty else pretty_header_json
+
     if arguments.metadata:
         if METADATA_KEY not in report.header:
             print(
                 "safetensors-print: {} declares no {} key".format(arguments.filename, METADATA_KEY),
                 file=sys.stderr,
             )
-        _write_lines([pretty_header_json(report.metadata)], sys.stdout)
+        _write_lines([render_json(report.metadata)], sys.stdout)
     elif arguments.json_only:
-        _write_lines([pretty_header_json(report.header)], sys.stdout)
+        _write_lines([render_json(report.header)], sys.stdout)
     else:
         _write_lines(
             render_report(report, verbose=arguments.verbose, sort_by=arguments.sort), sys.stdout

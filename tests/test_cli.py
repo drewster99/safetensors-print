@@ -242,6 +242,7 @@ def test_help_lists_the_documented_options(capsys):
     output = capsys.readouterr().out
     assert "--verbose" in output
     assert "--json-only" in output
+    assert "--pretty" in output
     assert "exit codes:" in output
 
 
@@ -348,6 +349,78 @@ def test_metadata_flag_is_mutually_exclusive_with_the_other_output_modes(valid_f
         with pytest.raises(SystemExit) as raised:
             main([valid_file, "--metadata", conflicting])
         assert raised.value.code == EXIT_USAGE
+
+
+def test_pretty_expands_encoded_metadata_values(valid_file, capsys):
+    assert main([valid_file, "--metadata", "--pretty"]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    assert '"layers": 2' in output
+    assert '{\\"layers\\": 2}' not in output
+    assert "shown decoded" in output
+    assert '"format": "pt"' in output
+    assert "INTEGRITY" not in output
+
+
+def test_pretty_leaves_values_that_are_not_encoded_json_alone(tmp_path, capsys):
+    header = {
+        "__metadata__": {"training_step": "5000", "notes": "autosave @ step 5000"},
+        "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    assert main([path, "--metadata", "--pretty"]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    assert '"training_step": "5000"' in output
+    assert '"notes": "autosave @ step 5000"' in output
+    assert "shown decoded" not in output
+
+
+def test_pretty_expands_encoded_values_under_json_only_too(valid_file, capsys):
+    assert main([valid_file, "--json-only", "--pretty"]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    assert "shown decoded" in output
+    assert '"dtype": "F32"' in output
+
+
+def test_pretty_without_metadata_or_json_only_is_a_usage_error(valid_file, capsys):
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, "--pretty"])
+
+    assert raised.value.code == EXIT_USAGE
+    assert "--pretty applies to" in capsys.readouterr().err
+
+
+def test_pretty_is_rejected_before_the_file_is_read(tmp_path, capsys):
+    """The usage error must not depend on the file existing."""
+    with pytest.raises(SystemExit) as raised:
+        main([str(tmp_path / "absent.safetensors"), "--pretty"])
+
+    assert raised.value.code == EXIT_USAGE
+
+
+def test_pretty_metadata_still_reports_violations_in_its_exit_code(file_with_a_gap, capsys):
+    assert main([file_with_a_gap, "--metadata", "--pretty"]) == EXIT_SPECIFICATION_VIOLATIONS
+
+
+def test_pretty_on_a_file_without_metadata_prints_an_empty_object(tmp_path, capsys):
+    header = {"w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    assert main([path, "--metadata", "--pretty"]) == EXIT_OK
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "{}"
+    assert "declares no __metadata__ key" in captured.err
+
+
+def test_metadata_without_pretty_stays_verbatim(valid_file, capsys):
+    """--pretty must be the only thing that costs --metadata its machine-readability."""
+    main([valid_file, "--metadata"])
+
+    assert "shown decoded" not in capsys.readouterr().out
 
 
 def test_metadata_flag_reports_specification_violations_in_its_exit_code(tmp_path, capsys):

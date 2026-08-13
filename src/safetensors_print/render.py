@@ -169,6 +169,15 @@ def pretty_json_lines(value: Any, expand_encoded_strings: bool = True) -> Iterat
         yield indent + block[-1] + tail
 
 
+def expanded_json_text(value: Any) -> str:
+    """`value` pretty-printed with JSON-encoded string values expanded in place.
+
+    Readable rather than parsable: an expansion carries an annotating comment, which
+    JSON has no syntax for. `pretty_header_json` is the parsable form of the same data.
+    """
+    return "\n".join(pretty_json_lines(value))
+
+
 def _render_file_section(report: Report, verbose: bool) -> Iterator[str]:
     layout = report.layout
     yield from section("FILE")
