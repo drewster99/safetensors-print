@@ -349,13 +349,12 @@ def read_report(path: str) -> Report:
         length_field_bytes = handle.read(HEADER_LENGTH_FIELD_SIZE)
         declared_header_size = _read_header_length(length_field_bytes, path)
 
+        # Refusing before the read matters as much as reporting it: the declared size
+        # is attacker-controlled, and reading it would allocate that much memory.
         if declared_header_size > MAX_HEADER_SIZE:
-            issues.append(
-                Issue(
-                    ERROR,
-                    "declared header size {:,} exceeds the {:,}-byte maximum accepted "
-                    "by the reference implementation".format(declared_header_size, MAX_HEADER_SIZE),
-                )
+            raise SafetensorsFormatError(
+                "{}: declared header size {:,} exceeds the {:,}-byte maximum accepted "
+                "by the reference implementation".format(path, declared_header_size, MAX_HEADER_SIZE)
             )
 
         header_json_begin = HEADER_LENGTH_FIELD_SIZE

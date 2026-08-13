@@ -135,6 +135,21 @@ def test_unsorted_offsets_alone_do_not_fail_the_run(tmp_path, capsys):
     assert "WARNING" in capsys.readouterr().out
 
 
+def test_unknown_dtype_is_counted_separately_from_agreement(tmp_path, capsys):
+    """An unknown dtype makes the expected size unknowable, which must not read as agreement."""
+    header = {
+        "known": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+        "mystery": {"dtype": "F128", "shape": [1], "data_offsets": [1, 17]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(17)))
+
+    assert main([path]) == EXIT_SPECIFICATION_VIOLATIONS
+
+    output = capsys.readouterr().out
+    assert "1 agree, 1 undeterminable" in output
+    assert "F128 (UNKNOWN)" in output
+
+
 def test_missing_file_reports_an_error_on_stderr(tmp_path, capsys):
     assert main([str(tmp_path / "absent.safetensors")]) == EXIT_UNREADABLE
 

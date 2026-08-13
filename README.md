@@ -76,7 +76,7 @@ INTEGRITY
   Gaps                            none
   Overlaps                        none
   Header sorted by data_offsets   no (specification recommends sorted)
-  Size/shape/dtype agreement      all 110 agree
+  Size/shape/dtype agreement      110 agree
 ```
 
 Under `--verbose`, each segment is described individually:
@@ -97,13 +97,23 @@ Under `--verbose`, each segment is described individually:
 
 ## What gets checked
 
-Every deviation from the [safetensors specification][spec] is reported in the `ISSUES`
+Deviations from the [safetensors specification][spec] are reported in the `ISSUES`
 section rather than aborting the dump, so a damaged file is still described as fully
-as possible:
+as possible.
+
+Only damage that makes the header unreadable stops the run (exit 3):
+
+- The file is too short to hold the 8-byte length field
+- The header runs past the end of the file
+- The header is not valid UTF-8, not valid JSON, or not a JSON object
+- The declared header size exceeds the 100 MB limit the reference implementation
+  enforces — refused before the read, since the declared size is untrusted input and
+  honouring it would allocate that much memory
+
+Everything else is reported and the dump continues (exit 1):
 
 - Header does not begin with `{` (0x7B)
-- Header is not valid UTF-8, not valid JSON, or not a JSON object
-- Header size exceeds the 100 MB limit the reference implementation enforces
+- Header padding contains bytes other than spaces (0x20)
 - Duplicate keys in the header
 - `__metadata__` values that are not strings
 - Entries missing or malforming `dtype`, `shape` or `data_offsets`

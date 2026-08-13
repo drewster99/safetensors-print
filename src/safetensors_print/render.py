@@ -163,8 +163,17 @@ def _render_integrity_section(report: Report) -> Iterator[str]:
         "Header sorted by data_offsets",
         "yes" if report.header_declared_in_offset_order else "no (specification recommends sorted)",
     )
-    mismatches = sum(1 for tensor in report.tensors if tensor.size_matches_declaration is False)
-    yield labelled("Size/shape/dtype agreement", "all {:,} agree".format(len(report.tensors)) if not mismatches else "{:,} disagree".format(mismatches))
+    # An unknown dtype leaves the expected size unknowable, which is neither agreement
+    # nor disagreement and must not be silently counted as either.
+    agreeing = sum(1 for tensor in report.tensors if tensor.size_matches_declaration is True)
+    disagreeing = sum(1 for tensor in report.tensors if tensor.size_matches_declaration is False)
+    undeterminable = sum(1 for tensor in report.tensors if tensor.size_matches_declaration is None)
+    counts = ["{:,} agree".format(agreeing)]
+    if disagreeing:
+        counts.append("{:,} disagree".format(disagreeing))
+    if undeterminable:
+        counts.append("{:,} undeterminable (dtype not defined by the format)".format(undeterminable))
+    yield labelled("Size/shape/dtype agreement", ", ".join(counts))
 
 
 def _render_issues_section(report: Report) -> Iterator[str]:

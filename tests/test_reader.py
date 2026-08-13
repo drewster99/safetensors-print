@@ -6,6 +6,7 @@ import struct
 
 import pytest
 
+from safetensors_print.dtypes import MAX_HEADER_SIZE
 from safetensors_print.reader import (
     ERROR,
     WARNING,
@@ -312,20 +313,39 @@ def test_json_array_header_raises(tmp_path):
         read_report(path)
 
 
-def test_header_larger_than_maximum_is_reported(tmp_path):
-    """A header past the reference implementation's limit is flagged, and still described."""
-    oversized = 100_000_001
-    header_bytes = b'{"__metadata__": {"note": "oversized header"}}'
+def test_header_larger_than_maximum_is_refused_before_it_is_read(tmp_path):
+    """The declared size is untrusted input, so an oversized header is refused, not allocated."""
+    oversized = MAX_HEADER_SIZE + 1
     path = tmp_path / "m.safetensors"
     with open(path, "wb") as handle:
         handle.write(struct.pack("<Q", oversized))
-        handle.write(header_bytes)
+        handle.write(b'{"__metadata__": {"note": "oversized header"}}')
         handle.truncate(8 + oversized)  # sparse padding, so no real bytes are written
 
-    report = read_report(str(path))
+    with pytest.raises(SafetensorsFormatError, match="exceeds the"):
+        read_report(str(path))
 
-    assert report.metadata == {"note": "oversized header"}
-    assert any("exceeds the" in message for message in _messages(report, ERROR))
+
+def test_header_at_exactly_the_maximum_size_is_accepted(tmp_path):
+    """The limit is inclusive, so a header of exactly the maximum size must still parse."""
+    header_bytes = b'{"__metadata__": {"note": "at the limit"}}'
+    padding = b" " * (MAX_HEADER_SIZE - len(header_bytes))
+    path = write_file(
+        tmp_path, "m.safetensors", build_file_bytes_from_raw_header(header_bytes + padding)
+    )
+
+    report = read_report(path)
+
+    assert report.layout.declared_header_size == MAX_HEADER_SIZE
+    assert report.metadata == {"note": "at the limit"}
+    assert report.issues == []
+
+
+def test_file_containing_only_the_length_field_raises(tmp_path):
+    path = write_file(tmp_path, "m.safetensors", struct.pack("<Q", 0))
+
+    with pytest.raises(SafetensorsFormatError, match="not valid JSON"):
+        read_report(path)
 
 
 def test_nul_padded_header_is_parsed_and_the_padding_is_reported(tmp_path):
