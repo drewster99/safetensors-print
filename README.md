@@ -22,7 +22,7 @@ python3 -m safetensors_print model.safetensors
 ## Usage
 
 ```
-safetensors-print <filename.safetensors> [--verbose | --json-only] [--sort offset|name]
+safetensors-print <filename.safetensors> [--verbose | --json-only | --metadata] [--sort offset|name]
 ```
 
 | Option | Effect |
@@ -30,22 +30,36 @@ safetensors-print <filename.safetensors> [--verbose | --json-only] [--sort offse
 | *(none)* | Full dump: file layout, integrity checks, issues, metadata, tensor table, dtype summary, header JSON |
 | `--verbose` | Adds a `TENSOR DETAIL` section: decoded leading element values, hex dumps of the head and tail of every segment, and absolute file offsets |
 | `--sort offset\|name` | Order of the `TENSORS` table. `offset` (default) lays out the data buffer and shows unclaimed gaps in place; `name` sorts alphabetically |
-| `--json-only` | Prints only the header JSON, pretty-printed with sorted keys |
+| `--json-only` | Prints only the header JSON, pretty-printed with sorted keys, verbatim |
+| `--metadata` | Prints only the `__metadata__` object, pretty-printed with sorted keys, verbatim |
 | `--version` | Prints the version |
 | `--help` | Usage |
 
-`--verbose` and `--json-only` are mutually exclusive.
+`--verbose`, `--json-only` and `--metadata` are mutually exclusive.
+
+`--json-only` and `--metadata` emit strictly valid JSON, byte-faithful to the file, so
+they pipe cleanly:
+
+```sh
+safetensors-print model.safetensors --metadata | jq .training_step
+```
+
+`--metadata` prints `{}` and notes it on stderr when the file declares no metadata, so
+a pipeline never receives empty input.
 
 The `TENSORS` table is the only listing of tensors. Ordered by offset it doubles as the
 map of the data buffer, with any unclaimed gaps shown in place, so no tensor is ever
 printed twice.
 
-`__METADATA__` prints as one JSON object with keys sorted. The format permits only
-string values, so model configurations are routinely stored as JSON-encoded strings;
-those are expanded in place and annotated rather than printed as a single escaped line
-hundreds of characters wide. The verbatim form of every value stays in the
-`HEADER JSON` section, so nothing is lost. Numeric-looking values such as `"5000"` are
-strings in the file and are shown as strings.
+The `__METADATA__` and `HEADER JSON` sections of the dump both print as JSON with keys
+sorted. The format permits only string values, so model configurations are routinely
+stored as JSON-encoded strings; in the dump those are expanded in place and annotated
+`/* stored as a JSON-encoded string, shown decoded */`, rather than printed as a single
+escaped line hundreds of characters wide. Numeric-looking values such as `"5000"` are
+strings in the file and stay strings.
+
+That expansion makes the dump readable but not machine-parsable. `--json-only` and
+`--metadata` print the verbatim JSON for that.
 
 ### Exit codes
 

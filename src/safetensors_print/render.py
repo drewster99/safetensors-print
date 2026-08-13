@@ -7,6 +7,7 @@ This module decides only how facts look. Every fact it renders is read from the
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from .dtypes import decoder_for
@@ -104,8 +105,68 @@ def render_table(headings: Sequence[str], rows: Sequence[Sequence[str]], right_a
 
 
 def pretty_header_json(header: Dict[str, Any]) -> str:
-    """The header re-serialized with sorted keys and two-space indentation."""
+    """The header re-serialized verbatim, with sorted keys and two-space indentation.
+
+    Strictly valid JSON, byte-faithful to what the file holds. This is what
+    `--json-only` prints, and it is the escape hatch for anything that needs to
+    consume the header rather than read it.
+    """
     return json.dumps(header, indent=2, sort_keys=True, ensure_ascii=False)
+
+
+_EXPANSION_PREFIX = "safetensors-print-expansion:"
+_EXPANSION_NOTE = "  /* stored as a JSON-encoded string, shown decoded */"
+
+# json.dumps escapes NUL even with ensure_ascii=False, so a NUL-delimited marker
+# survives serialization as a predictable literal and cannot collide with real data.
+_EXPANSION_LINE = re.compile(
+    r'^(?P<head>\s*(?:"(?:[^"\\]|\\.)*"\s*:\s*)?)'
+    r'"\\u0000' + _EXPANSION_PREFIX + r'(?P<index>\d+)\\u0000"'
+    r"(?P<tail>,?)$"
+)
+
+
+def pretty_json_lines(value: Any, expand_encoded_strings: bool = True) -> Iterator[str]:
+    """Pretty-printed JSON with sorted keys.
+
+    When `expand_encoded_strings` is set, a string value that itself holds a JSON
+    object or array is expanded in place and annotated, rather than printed as one
+    escaped line hundreds of characters wide. The verbatim form of such a value is
+    always available from `pretty_header_json`, which never expands anything.
+    """
+    expansions: List[Any] = []
+
+    def substitute(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {key: substitute(item) for key, item in node.items()}
+        if isinstance(node, list):
+            return [substitute(item) for item in node]
+        if isinstance(node, str) and expand_encoded_strings:
+            decoded = _decoded_json_value(node)
+            if decoded is not None:
+                expansions.append(decoded)
+                return "\x00{}{}\x00".format(_EXPANSION_PREFIX, len(expansions) - 1)
+        return node
+
+    serialized = json.dumps(substitute(value), indent=2, sort_keys=True, ensure_ascii=False)
+
+    for line in serialized.splitlines():
+        match = _EXPANSION_LINE.match(line)
+        if match is None:
+            yield line
+            continue
+        head, tail = match.group("head"), match.group("tail")
+        indent = head[: len(head) - len(head.lstrip())]
+        block = json.dumps(
+            expansions[int(match.group("index"))], indent=2, sort_keys=True, ensure_ascii=False
+        ).splitlines()
+        if len(block) == 1:
+            yield head + block[0] + tail + _EXPANSION_NOTE
+            continue
+        yield head + block[0] + _EXPANSION_NOTE
+        for nested in block[1:-1]:
+            yield indent + nested
+        yield indent + block[-1] + tail
 
 
 def _render_file_section(report: Report, verbose: bool) -> Iterator[str]:
@@ -216,40 +277,11 @@ def _decoded_json_value(value: str) -> Optional[Any]:
 
 
 def _render_metadata_json(report: Report) -> Iterator[str]:
-    """The metadata as one JSON object, with JSON-encoded string values shown decoded.
-
-    Values that hold JSON are expanded in place and annotated, rather than printed as a
-    single escaped line hundreds of characters wide. The verbatim, unexpanded form of
-    every value remains in the HEADER JSON section.
-    """
-    keys = sorted(report.metadata)
-    yield "{"
-    for index, key in enumerate(keys):
-        value = report.metadata[key]
-        trailing_comma = "," if index < len(keys) - 1 else ""
-        annotations = []
-        if key in report.non_string_metadata_keys:
-            annotations.append("not a string in the file")
-        decoded = _decoded_json_value(value)
-        if decoded is not None:
-            annotations.append("stored as a JSON-encoded string, shown decoded")
-        note = "  /* {} */".format("; ".join(annotations)) if annotations else ""
-
-        if decoded is None:
-            yield "  {}: {}{}{}".format(
-                json.dumps(key), json.dumps(value, ensure_ascii=False), trailing_comma, note
-            )
-            continue
-
-        block = json.dumps(decoded, indent=2, sort_keys=True, ensure_ascii=False).splitlines()
-        if len(block) == 1:
-            yield "  {}: {}{}{}".format(json.dumps(key), block[0], trailing_comma, note)
-            continue
-        yield "  {}: {}{}".format(json.dumps(key), block[0], note)
-        for line in block[1:-1]:
-            yield "  " + line
-        yield "  " + block[-1] + trailing_comma
-    yield "}"
+    if report.non_string_metadata_keys:
+        yield "  Values of {} are not strings in the file, which the format requires.".format(
+            ", ".join(repr(key) for key in report.non_string_metadata_keys)
+        )
+    yield from pretty_json_lines(report.metadata)
 
 
 def _tensor_row(tensor: TensorEntry) -> List[str]:
@@ -422,8 +454,10 @@ def _render_gap(gap: Gap, segments: SegmentReader) -> Iterator[str]:
 
 
 def _render_raw_header(report: Report) -> Iterator[str]:
-    yield from section("HEADER JSON (pretty-printed, keys sorted)")
-    yield pretty_header_json(report.header)
+    yield from section(
+        "HEADER JSON (pretty-printed, keys sorted; --json-only prints it verbatim)"
+    )
+    yield from pretty_json_lines(report.header)
 
 
 def render_report(report: Report, verbose: bool, sort_by: str = SORT_BY_OFFSET) -> Iterator[str]:

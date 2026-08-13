@@ -8,7 +8,7 @@ import sys
 from typing import Iterable, List, Optional, TextIO
 
 from . import __version__
-from .reader import SafetensorsFormatError, read_report
+from .reader import METADATA_KEY, SafetensorsFormatError, read_report
 from .render import SORT_BY_OFFSET, SORT_ORDERS, pretty_header_json, render_report
 
 EXIT_OK = 0
@@ -21,6 +21,10 @@ Print everything a .safetensors file states about itself: the byte layout, the
 __metadata__ block, every tensor's dtype, shape and size, a map of the data
 buffer accounting for every byte, and the header JSON pretty-printed with
 sorted keys.
+
+The dump expands metadata values that themselves hold JSON, so they read as
+nested objects instead of one very long escaped line. --json-only and
+--metadata print the file's verbatim JSON instead, for piping onward.
 """
 
 _EPILOG = """\
@@ -44,20 +48,27 @@ def build_argument_parser() -> argparse.ArgumentParser:
     output_mode.add_argument(
         "--verbose",
         action="store_true",
-        help="additionally decode leading element values, hex-dump the head and tail of "
-        "every data segment, and expand metadata values that themselves contain JSON",
+        help="add a TENSOR DETAIL section: decoded leading element values, hex dumps of the "
+        "head and tail of every data segment, and absolute file offsets",
     )
     output_mode.add_argument(
         "--json-only",
         action="store_true",
-        help="print only the header JSON, pretty-printed with sorted keys",
+        help="print only the header JSON, pretty-printed with sorted keys, verbatim",
+    )
+    output_mode.add_argument(
+        "--metadata",
+        action="store_true",
+        help="print only the __metadata__ object, pretty-printed with sorted keys, verbatim. "
+        "Prints {} when the file declares no metadata, and says so on stderr",
     )
     parser.add_argument(
         "--sort",
         choices=SORT_ORDERS,
         default=SORT_BY_OFFSET,
         help="order of the TENSORS table: 'offset' (default) lays out the data buffer and "
-        "shows any unclaimed gaps in place; 'name' sorts alphabetically. Ignored with --json-only",
+        "shows any unclaimed gaps in place; 'name' sorts alphabetically. Ignored with "
+        "--json-only and --metadata",
     )
     parser.add_argument("--version", action="version", version="%(prog)s {}".format(__version__))
     return parser
@@ -91,7 +102,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return EXIT_UNREADABLE
 
-    if arguments.json_only:
+    if arguments.metadata:
+        if METADATA_KEY not in report.header:
+            print(
+                "safetensors-print: {} declares no {} key".format(arguments.filename, METADATA_KEY),
+                file=sys.stderr,
+            )
+        _write_lines([pretty_header_json(report.metadata)], sys.stdout)
+    elif arguments.json_only:
         _write_lines([pretty_header_json(report.header)], sys.stdout)
     else:
         _write_lines(

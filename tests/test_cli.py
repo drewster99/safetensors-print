@@ -62,11 +62,26 @@ def test_default_run_reports_tensor_details(valid_file, capsys):
     assert "IEEE 754 single precision" in output
 
 
-def test_default_run_embeds_the_sorted_pretty_printed_header(valid_file, capsys):
+def test_default_run_embeds_the_header_with_sorted_keys(valid_file, capsys):
     main([valid_file])
 
-    output = capsys.readouterr().out
-    assert json.dumps(VALID_HEADER, indent=2, sort_keys=True) in output
+    header_section = capsys.readouterr().out.split("HEADER JSON")[1]
+    assert '"weight"' in header_section
+    assert '"dtype": "F32"' in header_section
+    assert header_section.index('"__metadata__"') < header_section.index('"weight"')
+
+
+def test_only_json_only_prints_the_header_verbatim(valid_file, capsys):
+    """The dump expands JSON-encoded values for reading; --json-only stays byte-faithful."""
+    main([valid_file])
+    dump = capsys.readouterr().out
+
+    main([valid_file, "--json-only"])
+    verbatim = capsys.readouterr().out
+
+    assert verbatim.strip() == json.dumps(VALID_HEADER, indent=2, sort_keys=True)
+    assert '{\\"layers\\": 2}' in verbatim
+    assert '{\\"layers\\": 2}' not in dump
 
 
 def test_json_only_prints_nothing_but_the_header(valid_file, capsys):
@@ -111,8 +126,8 @@ def test_metadata_is_rendered_as_json_with_encoded_values_decoded(valid_file, ca
     assert "shown decoded" in metadata_section
     assert '"layers": 2' in metadata_section
     assert '{\\"layers\\": 2}' not in metadata_section
-    # The verbatim escaped form is still available, in the header JSON section.
-    assert '{\\"layers\\": 2}' in output.split("HEADER JSON")[1]
+    # The header JSON section reads the same way, rather than repeating the escaped line.
+    assert "shown decoded" in output.split("HEADER JSON")[1]
 
 
 def test_metadata_json_rendering_does_not_need_verbose(valid_file, capsys):
@@ -296,3 +311,51 @@ def test_verbose_detail_section_is_absent_by_default(valid_file, capsys):
 
     main([valid_file, "--verbose"])
     assert "TENSOR DETAIL" in capsys.readouterr().out
+
+
+def test_metadata_flag_prints_only_the_metadata_object(valid_file, capsys):
+    assert main([valid_file, "--metadata"]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    assert json.loads(output) == VALID_HEADER["__metadata__"]
+    assert "INTEGRITY" not in output
+    assert "weight" not in output
+
+
+def test_metadata_flag_output_is_verbatim_and_sorted(valid_file, capsys):
+    """It must stay strictly valid JSON so it can be piped onward."""
+    main([valid_file, "--metadata"])
+
+    output = capsys.readouterr().out
+    assert output.strip() == json.dumps(VALID_HEADER["__metadata__"], indent=2, sort_keys=True)
+    assert output.index('"config"') < output.index('"format"')
+    assert "/*" not in output
+
+
+def test_metadata_flag_on_a_file_without_metadata_prints_an_empty_object(tmp_path, capsys):
+    header = {"w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    assert main([path, "--metadata"]) == EXIT_OK
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {}
+    assert "declares no __metadata__ key" in captured.err
+
+
+def test_metadata_flag_is_mutually_exclusive_with_the_other_output_modes(valid_file, capsys):
+    for conflicting in ("--verbose", "--json-only"):
+        with pytest.raises(SystemExit) as raised:
+            main([valid_file, "--metadata", conflicting])
+        assert raised.value.code == EXIT_USAGE
+
+
+def test_metadata_flag_reports_specification_violations_in_its_exit_code(tmp_path, capsys):
+    header = {
+        "__metadata__": {"note": "hi"},
+        "a": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(8)))
+
+    assert main([path, "--metadata"]) == EXIT_SPECIFICATION_VIOLATIONS
+    assert json.loads(capsys.readouterr().out) == {"note": "hi"}
