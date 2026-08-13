@@ -32,7 +32,7 @@ safetensors-print <filename.safetensors> [--verbose | --json-only | --metadata] 
 | `--sort offset\|name` | Order of the `TENSORS` table. `offset` (default) lays out the data buffer and shows unclaimed gaps in place; `name` sorts alphabetically |
 | `--json-only` | Prints only the header JSON, pretty-printed with sorted keys, verbatim |
 | `--metadata` | Prints only the `__metadata__` object, pretty-printed with sorted keys, verbatim |
-| `--pretty` | With `--json-only` or `--metadata`: expands values that themselves hold JSON, for reading rather than piping |
+| `--pretty` | With `--json-only` or `--metadata`: expands values that themselves hold JSON, still emitting valid JSON |
 | `--version` | Prints the version |
 | `--help` | Usage |
 
@@ -48,13 +48,17 @@ safetensors-print model.safetensors --metadata | jq .training_step
 `--metadata` prints `{}` and notes it on stderr when the file declares no metadata, so
 a pipeline never receives empty input.
 
-`--pretty` trades that byte-faithfulness for readability, giving `--metadata` and
-`--json-only` the same expansion the dump performs. It is rejected on the default dump,
-which always expands.
+`--pretty` gives those two modes the expansion the dump performs, so a configuration
+stored as an encoded string can be queried as structure:
 
 ```sh
-safetensors-print model.safetensors --metadata --pretty
+safetensors-print model.safetensors --metadata --pretty | jq .architecture.input_encoding
 ```
+
+The output is still valid JSON; what it gives up is byte-faithfulness, since a value the
+file holds as a string comes out as the object that string contains. It carries no
+annotating comment for exactly that reason. `--pretty` is rejected on the default dump,
+which always expands.
 
 The `TENSORS` table is the only listing of tensors. Ordered by offset it doubles as the
 map of the data buffer, with any unclaimed gaps shown in place, so no tensor is ever
@@ -67,8 +71,9 @@ are expanded in place and annotated `/* stored as a JSON-encoded string, shown d
 */`, rather than printed as a single escaped line hundreds of characters wide.
 Numeric-looking values such as `"5000"` are strings in the file and stay strings.
 
-That expansion makes the dump readable but not machine-parsable. `--json-only` and
-`--metadata` print the verbatim JSON for that; `--pretty` opts them into the expansion.
+That annotation makes the dump readable but not machine-parsable. `--json-only` and
+`--metadata` print the verbatim JSON for that, and `--pretty` expands without annotating,
+which stays parsable.
 
 ### Exit codes
 

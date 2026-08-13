@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from enum import Enum
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from .dtypes import decoder_for
@@ -114,6 +115,18 @@ def pretty_header_json(header: Dict[str, Any]) -> str:
     return json.dumps(header, indent=2, sort_keys=True, ensure_ascii=False)
 
 
+class ExpansionStyle(Enum):
+    """Whether an expanded value is marked as having been stored encoded.
+
+    The mark is a `/* */` comment, which JSON has no syntax for, so it is available
+    only where the output is prose for a reader. Anything that must parse as JSON
+    takes `PLAIN`, at the cost of no longer showing how the file stores the value.
+    """
+
+    ANNOTATED = "annotated"
+    PLAIN = "plain"
+
+
 _EXPANSION_PREFIX = "safetensors-print-expansion:"
 _EXPANSION_NOTE = "  /* stored as a JSON-encoded string, shown decoded */"
 
@@ -126,13 +139,14 @@ _EXPANSION_LINE = re.compile(
 )
 
 
-def pretty_json_lines(value: Any, expand_encoded_strings: bool = True) -> Iterator[str]:
-    """Pretty-printed JSON with sorted keys.
+def pretty_json_lines(value: Any, style: ExpansionStyle) -> Iterator[str]:
+    """Pretty-printed JSON with sorted keys, expanding values that themselves hold JSON.
 
-    When `expand_encoded_strings` is set, a string value that itself holds a JSON
-    object or array is expanded in place and annotated, rather than printed as one
-    escaped line hundreds of characters wide. The verbatim form of such a value is
-    always available from `pretty_header_json`, which never expands anything.
+    A string value holding a JSON object or array is expanded in place rather than
+    printed as one escaped line hundreds of characters wide. `style` decides whether
+    each expansion is marked as such. Either way the expansion is no longer
+    byte-faithful: what the file holds as a string is shown as structure, and
+    `pretty_header_json` is the form that reproduces the file.
     """
     expansions: List[Any] = []
 
@@ -141,13 +155,14 @@ def pretty_json_lines(value: Any, expand_encoded_strings: bool = True) -> Iterat
             return {key: substitute(item) for key, item in node.items()}
         if isinstance(node, list):
             return [substitute(item) for item in node]
-        if isinstance(node, str) and expand_encoded_strings:
+        if isinstance(node, str):
             decoded = _decoded_json_value(node)
             if decoded is not None:
                 expansions.append(decoded)
                 return "\x00{}{}\x00".format(_EXPANSION_PREFIX, len(expansions) - 1)
         return node
 
+    note = _EXPANSION_NOTE if style is ExpansionStyle.ANNOTATED else ""
     serialized = json.dumps(substitute(value), indent=2, sort_keys=True, ensure_ascii=False)
 
     for line in serialized.splitlines():
@@ -161,9 +176,9 @@ def pretty_json_lines(value: Any, expand_encoded_strings: bool = True) -> Iterat
             expansions[int(match.group("index"))], indent=2, sort_keys=True, ensure_ascii=False
         ).splitlines()
         if len(block) == 1:
-            yield head + block[0] + tail + _EXPANSION_NOTE
+            yield head + block[0] + tail + note
             continue
-        yield head + block[0] + _EXPANSION_NOTE
+        yield head + block[0] + note
         for nested in block[1:-1]:
             yield indent + nested
         yield indent + block[-1] + tail
@@ -172,10 +187,11 @@ def pretty_json_lines(value: Any, expand_encoded_strings: bool = True) -> Iterat
 def expanded_json_text(value: Any) -> str:
     """`value` pretty-printed with JSON-encoded string values expanded in place.
 
-    Readable rather than parsable: an expansion carries an annotating comment, which
-    JSON has no syntax for. `pretty_header_json` is the parsable form of the same data.
+    Strictly valid JSON, so it can be piped onward, but no longer byte-faithful: a
+    value the file stores as an encoded string is shown as the structure it holds.
+    `pretty_header_json` is the faithful form.
     """
-    return "\n".join(pretty_json_lines(value))
+    return "\n".join(pretty_json_lines(value, ExpansionStyle.PLAIN))
 
 
 def _render_file_section(report: Report, verbose: bool) -> Iterator[str]:
@@ -290,7 +306,7 @@ def _render_metadata_json(report: Report) -> Iterator[str]:
         yield "  Values of {} are not strings in the file, which the format requires.".format(
             ", ".join(repr(key) for key in report.non_string_metadata_keys)
         )
-    yield from pretty_json_lines(report.metadata)
+    yield from pretty_json_lines(report.metadata, ExpansionStyle.ANNOTATED)
 
 
 def _tensor_row(tensor: TensorEntry) -> List[str]:
@@ -304,7 +320,8 @@ def _tensor_row(tensor: TensorEntry) -> List[str]:
         format_shape(tensor.shape),
         "{:,}".format(tensor.element_count),
         "{:,}{}".format(tensor.declared_byte_count, size_note),
-        "{:,}..{:,}".format(tensor.begin, tensor.end),
+        "{:,}".format(tensor.begin),
+        "{:,}".format(tensor.end),
     ]
 
 
@@ -315,7 +332,8 @@ def _gap_row(gap: Gap) -> List[str]:
         "",
         "",
         "{:,}".format(gap.size),
-        "{:,}..{:,}".format(gap.begin, gap.end),
+        "{:,}".format(gap.begin),
+        "{:,}".format(gap.end),
     ]
 
 
@@ -339,9 +357,9 @@ def _render_tensors_section(report: Report, sort_by: str) -> Iterator[str]:
         rows = [_tensor_row(tensor) for tensor in sorted(report.tensors, key=lambda entry: entry.name)]
 
     yield from render_table(
-        ["NAME", "DTYPE", "SHAPE", "ELEMENTS", "BYTES", "DATA_OFFSETS"],
+        ["NAME", "DTYPE", "SHAPE", "ELEMENTS", "BYTES", "OFFSET_BEGIN", "OFFSET_END"],
         rows,
-        right_aligned=(3, 4, 5),
+        right_aligned=(3, 4, 5, 6),
     )
 
 
@@ -466,7 +484,7 @@ def _render_raw_header(report: Report) -> Iterator[str]:
     yield from section(
         "HEADER JSON (pretty-printed, keys sorted; --json-only prints it verbatim)"
     )
-    yield from pretty_json_lines(report.header)
+    yield from pretty_json_lines(report.header, ExpansionStyle.ANNOTATED)
 
 
 def render_report(report: Report, verbose: bool, sort_by: str = SORT_BY_OFFSET) -> Iterator[str]:

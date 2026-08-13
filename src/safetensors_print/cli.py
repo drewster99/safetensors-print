@@ -31,7 +31,8 @@ sorted keys.
 The dump expands metadata values that themselves hold JSON, so they read as
 nested objects instead of one very long escaped line. --json-only and
 --metadata print the file's verbatim JSON instead, for piping onward; add
---pretty to expand those values there too, for reading rather than piping.
+--pretty to expand those values there too. --pretty output is still valid
+JSON, but it no longer reproduces the file byte for byte.
 """
 
 _EPILOG = """\
@@ -73,9 +74,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--pretty",
         action="store_true",
         help="with --metadata or --json-only: expand every value that itself holds a JSON "
-        "object or array, annotating each one, instead of printing it as a single escaped "
-        "line. The output reads well but is no longer valid JSON, so it cannot be piped "
-        "into a JSON consumer. The default dump already expands these values",
+        "object or array, instead of printing it as a single escaped line. The output is "
+        "still valid JSON and still pipes, but it no longer reproduces the file: a value "
+        "stored as an encoded string comes out as the structure it holds. The default dump "
+        "already expands these values",
     )
     parser.add_argument(
         "--sort",

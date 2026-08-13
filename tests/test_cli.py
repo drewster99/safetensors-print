@@ -288,6 +288,30 @@ def test_sort_by_name_reorders_the_same_single_table(tmp_path, capsys):
     assert "ordered by name" in output
 
 
+def test_offsets_are_two_columns_rather_than_a_joined_range(tmp_path, capsys):
+    header = {
+        "w": {"dtype": "U8", "shape": [3], "data_offsets": [0, 3]},
+        "x": {"dtype": "U8", "shape": [1], "data_offsets": [3, 4]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(4)))
+
+    main([path])
+
+    table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
+    heading = next(line for line in table.splitlines() if "OFFSET_BEGIN" in line)
+    assert heading.index("OFFSET_BEGIN") < heading.index("OFFSET_END")
+    assert "DATA_OFFSETS" not in table
+    assert ".." not in table
+
+
+def test_a_gap_row_fills_both_offset_columns(file_with_a_gap, capsys):
+    main([file_with_a_gap])
+
+    table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
+    gap_row = next(line for line in table.splitlines() if "unclaimed gap" in line)
+    assert gap_row.split()[-2:] == ["1", "8"]
+
+
 def test_gaps_appear_in_place_only_when_ordered_by_offset(file_with_a_gap, capsys):
     main([file_with_a_gap])
     offset_table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
@@ -355,11 +379,19 @@ def test_pretty_expands_encoded_metadata_values(valid_file, capsys):
     assert main([valid_file, "--metadata", "--pretty"]) == EXIT_OK
 
     output = capsys.readouterr().out
-    assert '"layers": 2' in output
-    assert '{\\"layers\\": 2}' not in output
-    assert "shown decoded" in output
-    assert '"format": "pt"' in output
+    assert json.loads(output) == {"format": "pt", "config": {"layers": 2}}
     assert "INTEGRITY" not in output
+
+
+def test_pretty_output_is_still_valid_json(valid_file, capsys):
+    """Expansion must not cost the output its parsability, so no annotating comments."""
+    for mode in ("--metadata", "--json-only"):
+        main([valid_file, mode, "--pretty"])
+
+        output = capsys.readouterr().out
+        json.loads(output)
+        assert "/*" not in output
+        assert "shown decoded" not in output
 
 
 def test_pretty_leaves_values_that_are_not_encoded_json_alone(tmp_path, capsys):
@@ -372,17 +404,15 @@ def test_pretty_leaves_values_that_are_not_encoded_json_alone(tmp_path, capsys):
     assert main([path, "--metadata", "--pretty"]) == EXIT_OK
 
     output = capsys.readouterr().out
-    assert '"training_step": "5000"' in output
-    assert '"notes": "autosave @ step 5000"' in output
-    assert "shown decoded" not in output
+    assert json.loads(output) == header["__metadata__"]
 
 
 def test_pretty_expands_encoded_values_under_json_only_too(valid_file, capsys):
     assert main([valid_file, "--json-only", "--pretty"]) == EXIT_OK
 
-    output = capsys.readouterr().out
-    assert "shown decoded" in output
-    assert '"dtype": "F32"' in output
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["__metadata__"]["config"] == {"layers": 2}
+    assert parsed["weight"] == VALID_HEADER["weight"]
 
 
 def test_pretty_without_metadata_or_json_only_is_a_usage_error(valid_file, capsys):
@@ -416,10 +446,19 @@ def test_pretty_on_a_file_without_metadata_prints_an_empty_object(tmp_path, caps
     assert "declares no __metadata__ key" in captured.err
 
 
-def test_metadata_without_pretty_stays_verbatim(valid_file, capsys):
-    """--pretty must be the only thing that costs --metadata its machine-readability."""
+def test_metadata_without_pretty_stays_byte_faithful(valid_file, capsys):
+    """--pretty is the only thing that turns an encoded string into structure."""
     main([valid_file, "--metadata"])
 
+    assert json.loads(capsys.readouterr().out)["config"] == '{"layers": 2}'
+
+
+def test_the_annotating_comment_belongs_to_the_dump_only(valid_file, capsys):
+    """The dump is prose and can say how a value is stored; the JSON modes cannot."""
+    main([valid_file])
+    assert "shown decoded" in capsys.readouterr().out
+
+    main([valid_file, "--metadata", "--pretty"])
     assert "shown decoded" not in capsys.readouterr().out
 
 
