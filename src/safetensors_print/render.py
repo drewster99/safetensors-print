@@ -362,10 +362,6 @@ def _render_tensors_section(report: Report, sort_by: str) -> Iterator[str]:
     else:
         yield from section("TENSORS (ordered by name)")
 
-    if not report.tensors and not report.gaps:
-        yield "  The header declares no tensors."
-        return
-
     if sort_by == SORT_BY_OFFSET:
         rows = [
             _gap_row(item) if isinstance(item, Gap) else _tensor_row(item)
@@ -373,6 +369,12 @@ def _render_tensors_section(report: Report, sort_by: str) -> Iterator[str]:
         ]
     else:
         rows = [_tensor_row(tensor) for tensor in sorted(report.tensors, key=lambda entry: entry.name)]
+
+    # Ordering by name drops the gaps, so a file whose only entries are unusable leaves
+    # nothing to tabulate. An empty section under a heading would read as a rendering fault.
+    if not rows:
+        yield "  The header declares no tensors."
+        return
 
     yield from render_table(
         ["NAME", "DTYPE", "SHAPE", "ELEMENTS", "BYTES", "OFFSET_BEGIN", "OFFSET_END"],

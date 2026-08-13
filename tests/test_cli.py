@@ -292,6 +292,18 @@ def test_offsets_are_two_columns_rather_than_a_joined_range(tmp_path, capsys):
     assert ".." not in table
 
 
+def test_a_table_with_no_rows_says_so_rather_than_printing_a_bare_heading(tmp_path, capsys):
+    """Ordering by name drops gaps, so a file of only unusable entries tabulates nothing."""
+    header = {"broken": {"dtype": "F32", "shape": [-2], "data_offsets": [0, 8]}}
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(8)))
+
+    assert main([path, "--tensors", "--sort", "name"]) == EXIT_SPECIFICATION_VIOLATIONS
+
+    output = capsys.readouterr().out
+    assert "The header declares no tensors." in output
+    assert section_titles(output) == ["TENSORS"]
+
+
 def test_a_gap_row_fills_both_offset_columns(file_with_a_gap, capsys):
     main([file_with_a_gap])
 
@@ -501,6 +513,29 @@ def test_verbose_is_rejected_when_the_tensors_are_not_selected(valid_file, capsy
 
     assert raised.value.code == EXIT_USAGE
     assert "--verbose adds detail to the tensors output" in capsys.readouterr().err
+
+
+def test_sort_is_rejected_when_the_tensors_are_not_selected(valid_file, capsys):
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, "--summary", "--sort", "name"])
+
+    assert raised.value.code == EXIT_USAGE
+    assert "--sort orders the tensors table" in capsys.readouterr().err
+
+
+def test_sort_is_accepted_with_the_tensors_and_with_no_selection(valid_file, capsys):
+    assert main([valid_file, "--tensors", "--sort", "name"]) == EXIT_OK
+    capsys.readouterr()
+    assert main([valid_file, "--sort", "name"]) == EXIT_OK
+    assert "ordered by name" in capsys.readouterr().out
+
+
+def test_sort_is_rejected_alongside_the_metadata_forms(valid_file, capsys):
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, "--metadata", "--sort", "name"])
+
+    assert raised.value.code == EXIT_USAGE
+    assert "cannot be combined with --sort" in capsys.readouterr().err
 
 
 def test_sort_applies_to_a_lone_tensors_section(file_with_a_gap, capsys):

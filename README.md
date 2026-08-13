@@ -236,6 +236,44 @@ python3 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
+### Testing against real files
+
+The unit suite builds its own small files. Everything else runs against a corpus in
+`tests/corpus`, which is untracked and rebuilt on demand:
+
+```sh
+./scripts/run-full-test-suite.sh --fetch        # unit suite, then the option matrix
+./scripts/run-full-test-suite.sh --fetch --skip-large    # skip the 100 MB+ downloads
+```
+
+The corpus has three parts:
+
+| Part | Contents |
+| --- | --- |
+| `tests/corpus/synthetic/` | 31 files written by `scripts/make-synthetic-corpus.py`: one tensor of every defined dtype, every violation the reader reports, and every way a header can be unreadable. Rebuilt each run |
+| `tests/corpus/third-party/` | Models from other people's tools, fetched by `scripts/fetch-test-corpus.sh`: transformers, a PEFT adapter, sentence-transformers, diffusers, and a 4-bit MLX quantisation |
+| `tests/corpus/local/` | Whatever you put there, symlinks included. Skipped if empty |
+
+`scripts/run-option-matrix.py` runs each file through all 111 combinations of the
+section flags, `--verbose`, `--sort` and the two metadata forms, plus the combinations
+that are meant to be refused, and checks each result:
+
+- The exit code matches the file, not the options: every usable combination agrees on 0
+  or 1, refused combinations exit 2 writing nothing to stdout, unreadable files exit 3
+- The section headings printed are exactly the ones the flags asked for, in the order
+  the full dump uses
+- `--metadata` and `--metadata-raw` parse as JSON and match the file's own metadata,
+  read independently of the tool
+- No traceback ever reaches stderr, including from a closed pipe
+- Two identical runs produce identical bytes
+
+The matrix restates the option rules rather than importing them, so a disagreement is a
+failure whichever side is wrong. It can also test an installed build:
+
+```sh
+.venv/bin/python scripts/run-option-matrix.py --command safetensors-print tests/corpus
+```
+
 ## Releasing
 
 Publishing to PyPI runs from `.github/workflows/publish.yml` using trusted publishing,

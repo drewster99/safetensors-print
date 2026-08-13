@@ -116,7 +116,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sort",
         choices=SORT_ORDERS,
-        default=SORT_BY_OFFSET,
+        # Left unset rather than defaulted, so that naming it where it can have no effect
+        # is distinguishable from not naming it at all.
+        default=None,
         help="order of the TENSORS table: 'offset' (default) lays out the data buffer and "
         "shows any unclaimed gaps in place; 'name' sorts alphabetically",
     )
@@ -141,13 +143,20 @@ def _reject_unusable_combinations(parser: argparse.ArgumentParser, arguments: ar
     named_sections = ["--" + flag for flag in _SECTION_FLAGS if getattr(arguments, flag)]
 
     if not (arguments.metadata or arguments.metadata_raw):
-        if arguments.verbose and named_sections and not arguments.tensors:
-            parser.error(
-                "--verbose adds detail to the tensors output; add --tensors, or select no sections"
-            )
+        if named_sections and not arguments.tensors:
+            if arguments.verbose:
+                parser.error(
+                    "--verbose adds detail to the tensors output; add --tensors, or select no sections"
+                )
+            if arguments.sort is not None:
+                parser.error(
+                    "--sort orders the tensors table; add --tensors, or select no sections"
+                )
         return
 
     conflicting = named_sections + (["--verbose"] if arguments.verbose else [])
+    if arguments.sort is not None:
+        conflicting.append("--sort")
     if conflicting:
         parser.error(
             "{} prints the metadata on its own and cannot be combined with {}".format(
@@ -200,7 +209,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 report,
                 sections=_selected_sections(arguments),
                 verbose=arguments.verbose,
-                sort_by=arguments.sort,
+                sort_by=arguments.sort or SORT_BY_OFFSET,
             ),
             sys.stdout,
         )

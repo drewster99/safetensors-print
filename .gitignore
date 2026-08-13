@@ -7,3 +7,6 @@ build/
 dist/
 *.egg-info/
 .DS_Store
+
+# Test corpus: downloaded models, generated edge cases, and whatever you link in.
+tests/corpus/

@@ -28,6 +28,29 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+  option-matrix:
+    # Every command line combination against the generated edge cases. The
+    # third-party corpus is not fetched here: CI should not depend on other
+    # people's downloads staying available.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e "."
+
+      - name: Build the synthetic corpus
+        run: python scripts/make-synthetic-corpus.py
+
+      - name: Run every option combination
+        run: |
+          python scripts/run-option-matrix.py tests/corpus/synthetic \
+            --command "$(which safetensors-print)"
+
   package:
     runs-on: ubuntu-latest
     steps:
