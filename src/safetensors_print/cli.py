@@ -9,7 +9,7 @@ from typing import Iterable, List, Optional, TextIO
 
 from . import __version__
 from .reader import SafetensorsFormatError, read_report
-from .render import pretty_header_json, render_report
+from .render import SORT_BY_OFFSET, SORT_ORDERS, pretty_header_json, render_report
 
 EXIT_OK = 0
 EXIT_SPECIFICATION_VIOLATIONS = 1
@@ -52,6 +52,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print only the header JSON, pretty-printed with sorted keys",
     )
+    parser.add_argument(
+        "--sort",
+        choices=SORT_ORDERS,
+        default=SORT_BY_OFFSET,
+        help="order of the TENSORS table: 'offset' (default) lays out the data buffer and "
+        "shows any unclaimed gaps in place; 'name' sorts alphabetically. Ignored with --json-only",
+    )
     parser.add_argument("--version", action="version", version="%(prog)s {}".format(__version__))
     return parser
 
@@ -87,7 +94,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if arguments.json_only:
         _write_lines([pretty_header_json(report.header)], sys.stdout)
     else:
-        _write_lines(render_report(report, verbose=arguments.verbose), sys.stdout)
+        _write_lines(
+            render_report(report, verbose=arguments.verbose, sort_by=arguments.sort), sys.stdout
+        )
 
     return EXIT_SPECIFICATION_VIOLATIONS if report.has_errors else EXIT_OK
 

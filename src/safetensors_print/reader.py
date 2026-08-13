@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import struct
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from .dtypes import MAX_HEADER_SIZE, DType, dtype_named
 
@@ -160,6 +160,23 @@ class Report:
     @property
     def tensors_in_offset_order(self) -> List[TensorEntry]:
         return sorted(self.tensors, key=lambda tensor: (tensor.begin, tensor.end, tensor.name))
+
+    def data_buffer_walk(self) -> List[Union[TensorEntry, Gap]]:
+        """Tensors and unclaimed gaps in the order they occupy the data buffer.
+
+        This is the one description of the buffer's physical layout; every view that
+        walks the buffer is built from it, so no two views can disagree.
+        """
+        items: List[Union[TensorEntry, Gap]] = list(self.tensors) + list(self.gaps)
+        return sorted(
+            items,
+            key=lambda item: (
+                item.begin,
+                isinstance(item, Gap),
+                item.end,
+                getattr(item, "name", ""),
+            ),
+        )
 
     @property
     def claimed_byte_count(self) -> int:

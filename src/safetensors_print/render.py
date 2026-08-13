@@ -23,6 +23,10 @@ PREVIEW_ELEMENT_COUNT = 8
 PREVIEW_BYTE_COUNT = 32
 HEX_BYTES_PER_LINE = 16
 
+SORT_BY_OFFSET = "offset"
+SORT_BY_NAME = "name"
+SORT_ORDERS = (SORT_BY_OFFSET, SORT_BY_NAME)
+
 _BINARY_UNITS = ("bytes", "KiB", "MiB", "GiB", "TiB", "PiB")
 
 
@@ -186,7 +190,7 @@ def _render_issues_section(report: Report) -> Iterator[str]:
         yield "  {}  {}".format(issue.severity.upper().ljust(label_width), issue.message)
 
 
-def _render_metadata_section(report: Report, verbose: bool) -> Iterator[str]:
+def _render_metadata_section(report: Report) -> Iterator[str]:
     yield from section("__METADATA__")
     if METADATA_KEY not in report.header:
         yield "  The file declares no __metadata__ key."
@@ -194,51 +198,105 @@ def _render_metadata_section(report: Report, verbose: bool) -> Iterator[str]:
     if not report.metadata:
         yield "  __metadata__ is present but empty."
         return
-
-    for key in sorted(report.metadata):
-        value = report.metadata[key]
-        marker = "  (NOT A STRING IN THE FILE)" if key in report.non_string_metadata_keys else ""
-        yield "  {}{}".format(key, marker)
-        yield "      {}".format(value)
-        if verbose:
-            yield from _render_nested_json(value)
+    yield from _render_metadata_json(report)
 
 
-def _render_nested_json(value: str) -> Iterator[str]:
-    """Expand a metadata value that itself holds JSON, which is common for model configs."""
+def _decoded_json_value(value: str) -> Optional[Any]:
+    """A metadata value's own JSON content, when it holds a JSON object or array.
+
+    Model configurations are routinely stored this way, since the format permits only
+    string values. Bare JSON scalars are left alone: `"1000000"` is a string in the
+    file and showing it as a number would misrepresent it.
+    """
     try:
-        nested = json.loads(value)
+        decoded = json.loads(value)
     except (json.JSONDecodeError, ValueError):
-        return
-    if not isinstance(nested, (dict, list)):
-        return
-    yield "      -- decoded as JSON --"
-    for line in json.dumps(nested, indent=2, sort_keys=True, ensure_ascii=False).splitlines():
-        yield "      {}".format(line)
+        return None
+    return decoded if isinstance(decoded, (dict, list)) else None
 
 
-def _render_tensors_section(report: Report) -> Iterator[str]:
-    yield from section("TENSORS")
-    if not report.tensors:
+def _render_metadata_json(report: Report) -> Iterator[str]:
+    """The metadata as one JSON object, with JSON-encoded string values shown decoded.
+
+    Values that hold JSON are expanded in place and annotated, rather than printed as a
+    single escaped line hundreds of characters wide. The verbatim, unexpanded form of
+    every value remains in the HEADER JSON section.
+    """
+    keys = sorted(report.metadata)
+    yield "{"
+    for index, key in enumerate(keys):
+        value = report.metadata[key]
+        trailing_comma = "," if index < len(keys) - 1 else ""
+        annotations = []
+        if key in report.non_string_metadata_keys:
+            annotations.append("not a string in the file")
+        decoded = _decoded_json_value(value)
+        if decoded is not None:
+            annotations.append("stored as a JSON-encoded string, shown decoded")
+        note = "  /* {} */".format("; ".join(annotations)) if annotations else ""
+
+        if decoded is None:
+            yield "  {}: {}{}{}".format(
+                json.dumps(key), json.dumps(value, ensure_ascii=False), trailing_comma, note
+            )
+            continue
+
+        block = json.dumps(decoded, indent=2, sort_keys=True, ensure_ascii=False).splitlines()
+        if len(block) == 1:
+            yield "  {}: {}{}{}".format(json.dumps(key), block[0], trailing_comma, note)
+            continue
+        yield "  {}: {}{}".format(json.dumps(key), block[0], note)
+        for line in block[1:-1]:
+            yield "  " + line
+        yield "  " + block[-1] + trailing_comma
+    yield "}"
+
+
+def _tensor_row(tensor: TensorEntry) -> List[str]:
+    expected = tensor.expected_byte_count
+    size_note = ""
+    if expected is not None and expected != tensor.declared_byte_count:
+        size_note = " (expected {:,})".format(expected)
+    return [
+        tensor.name,
+        tensor.dtype_name if tensor.dtype is not None else tensor.dtype_name + " (UNKNOWN)",
+        format_shape(tensor.shape),
+        "{:,}".format(tensor.element_count),
+        "{:,}{}".format(tensor.declared_byte_count, size_note),
+        "{:,}..{:,}".format(tensor.begin, tensor.end),
+    ]
+
+
+def _gap_row(gap: Gap) -> List[str]:
+    return [
+        "-- unclaimed gap --",
+        "",
+        "",
+        "",
+        "{:,}".format(gap.size),
+        "{:,}..{:,}".format(gap.begin, gap.end),
+    ]
+
+
+def _render_tensors_section(report: Report, sort_by: str) -> Iterator[str]:
+    """The one table of tensors. Ordered by offset it doubles as the data buffer's map."""
+    if sort_by == SORT_BY_OFFSET:
+        yield from section("TENSORS (ordered by offset within the data buffer)")
+    else:
+        yield from section("TENSORS (ordered by name)")
+
+    if not report.tensors and not report.gaps:
         yield "  The header declares no tensors."
         return
 
-    rows = []
-    for tensor in sorted(report.tensors, key=lambda entry: entry.name):
-        expected = tensor.expected_byte_count
-        size_note = ""
-        if expected is not None and expected != tensor.declared_byte_count:
-            size_note = " (expected {:,})".format(expected)
-        rows.append(
-            [
-                tensor.name,
-                tensor.dtype_name if tensor.dtype is not None else tensor.dtype_name + " (UNKNOWN)",
-                format_shape(tensor.shape),
-                "{:,}".format(tensor.element_count),
-                "{:,}{}".format(tensor.declared_byte_count, size_note),
-                "{:,}..{:,}".format(tensor.begin, tensor.end),
-            ]
-        )
+    if sort_by == SORT_BY_OFFSET:
+        rows = [
+            _gap_row(item) if isinstance(item, Gap) else _tensor_row(item)
+            for item in report.data_buffer_walk()
+        ]
+    else:
+        rows = [_tensor_row(tensor) for tensor in sorted(report.tensors, key=lambda entry: entry.name)]
+
     yield from render_table(
         ["NAME", "DTYPE", "SHAPE", "ELEMENTS", "BYTES", "DATA_OFFSETS"],
         rows,
@@ -303,50 +361,19 @@ def _preview_values(tensor: TensorEntry, raw: bytes) -> Optional[str]:
     return "[" + ", ".join(rendered) + suffix + "]"
 
 
-def _render_segment_map(report: Report, verbose: bool) -> Iterator[str]:
-    yield from section("DATA SEGMENT MAP (ordered by offset within the data buffer)")
+def _render_tensor_detail(report: Report) -> Iterator[str]:
+    """Byte-level detail for each segment, in the order it occupies the data buffer."""
+    yield from section("TENSOR DETAIL (ordered by offset within the data buffer)")
     if not report.tensors and not report.gaps:
         yield "  The data buffer is empty."
         return
 
-    gaps_by_begin = {gap.begin: gap for gap in report.gaps}
-    ordered = report.tensors_in_offset_order
-
-    if not verbose:
-        rows: List[List[str]] = []
-        cursor = 0
-        for tensor in ordered:
-            gap = gaps_by_begin.get(cursor)
-            if gap is not None and gap.begin < tensor.begin:
-                rows.append(["-- GAP --", "", "", "{:,}".format(gap.size), "{:,}..{:,}".format(gap.begin, gap.end)])
-                cursor = gap.end
-            rows.append(
-                [
-                    tensor.name,
-                    tensor.dtype_name,
-                    format_shape(tensor.shape),
-                    "{:,}".format(tensor.declared_byte_count),
-                    "{:,}..{:,}".format(tensor.begin, tensor.end),
-                ]
-            )
-            cursor = max(cursor, tensor.end)
-        trailing = gaps_by_begin.get(cursor)
-        if trailing is not None:
-            rows.append(
-                ["-- GAP --", "", "", "{:,}".format(trailing.size), "{:,}..{:,}".format(trailing.begin, trailing.end)]
-            )
-        yield from render_table(
-            ["SEGMENT", "DTYPE", "SHAPE", "BYTES", "RANGE IN DATA BUFFER"], rows, right_aligned=(3, 4)
-        )
-        return
-
     with SegmentReader(report.layout.path, report.layout) as segments:
-        cursor = 0
-        for tensor in ordered:
-            gap = gaps_by_begin.get(cursor)
-            if gap is not None and gap.begin < tensor.begin:
-                yield from _render_gap(gap, segments)
-                cursor = gap.end
+        for item in report.data_buffer_walk():
+            if isinstance(item, Gap):
+                yield from _render_gap(item, segments)
+                continue
+            tensor = item
             yield ""
             yield "  {}".format(tensor.name)
             yield labelled("dtype", "{} ({} bits per element)".format(tensor.dtype_name, tensor.dtype.bits_per_element if tensor.dtype else "?"), 26)
@@ -382,16 +409,13 @@ def _render_segment_map(report: Report, verbose: bool) -> Iterator[str]:
                 tail = segments.read_tail(tensor, PREVIEW_BYTE_COUNT)
                 yield "    last {} bytes:".format(len(tail))
                 yield from hex_dump(tail, tensor.end - len(tail))
-            cursor = max(cursor, tensor.end)
-
-        trailing = gaps_by_begin.get(cursor)
-        if trailing is not None:
-            yield from _render_gap(trailing, segments)
 
 
 def _render_gap(gap: Gap, segments: SegmentReader) -> Iterator[str]:
     yield ""
-    yield "  -- GAP: {:,} bytes at {:,}..{:,}, claimed by no tensor --".format(gap.size, gap.begin, gap.end)
+    yield "  -- unclaimed gap: {:,} bytes at {:,}..{:,}, claimed by no tensor --".format(
+        gap.size, gap.begin, gap.end
+    )
     raw = segments.read(gap.begin, min(PREVIEW_BYTE_COUNT, gap.size))
     if raw:
         yield from hex_dump(raw, gap.begin)
@@ -402,14 +426,15 @@ def _render_raw_header(report: Report) -> Iterator[str]:
     yield pretty_header_json(report.header)
 
 
-def render_report(report: Report, verbose: bool) -> Iterator[str]:
+def render_report(report: Report, verbose: bool, sort_by: str = SORT_BY_OFFSET) -> Iterator[str]:
     """Every line of the default (and, when `verbose`, the expanded) dump."""
     yield from _render_file_section(report, verbose)
     yield from _render_integrity_section(report)
     yield from _render_issues_section(report)
-    yield from _render_metadata_section(report, verbose)
-    yield from _render_tensors_section(report)
+    yield from _render_metadata_section(report)
+    yield from _render_tensors_section(report, sort_by)
     yield from _render_dtype_summary(report)
-    yield from _render_segment_map(report, verbose)
+    if verbose:
+        yield from _render_tensor_detail(report)
     yield from _render_raw_header(report)
     yield ""

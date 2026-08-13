@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from safetensors_print.render import RULE_WIDTH
 from safetensors_print.cli import (
     EXIT_OK,
     EXIT_SPECIFICATION_VIOLATIONS,
@@ -46,7 +47,6 @@ def test_default_run_succeeds_and_prints_every_section(valid_file, capsys):
         "__METADATA__",
         "TENSORS",
         "DTYPE SUMMARY",
-        "DATA SEGMENT MAP",
         "HEADER JSON",
     ):
         assert heading in output
@@ -101,18 +101,57 @@ def test_verbose_adds_decoded_values_and_hex_dumps(valid_file, capsys):
     assert "absolute file offsets" in output
 
 
-def test_verbose_expands_metadata_values_that_contain_json(valid_file, capsys):
-    main([valid_file, "--verbose"])
-
-    output = capsys.readouterr().out
-    assert "decoded as JSON" in output
-    assert '"layers": 2' in output
-
-
-def test_default_run_does_not_expand_nested_metadata_json(valid_file, capsys):
+def test_metadata_is_rendered_as_json_with_encoded_values_decoded(valid_file, capsys):
+    """A JSON-encoded metadata value is expanded in place, not printed as one escaped line."""
     main([valid_file])
 
-    assert "decoded as JSON" not in capsys.readouterr().out
+    output = capsys.readouterr().out
+    metadata_section = output.split("__METADATA__")[1].split("TENSORS")[0]
+    assert '"format": "pt"' in metadata_section
+    assert "shown decoded" in metadata_section
+    assert '"layers": 2' in metadata_section
+    assert '{\\"layers\\": 2}' not in metadata_section
+    # The verbatim escaped form is still available, in the header JSON section.
+    assert '{\\"layers\\": 2}' in output.split("HEADER JSON")[1]
+
+
+def test_metadata_json_rendering_does_not_need_verbose(valid_file, capsys):
+    main([valid_file])
+    default_output = capsys.readouterr().out
+
+    main([valid_file, "--verbose"])
+    verbose_output = capsys.readouterr().out
+
+    assert "shown decoded" in default_output
+    assert "shown decoded" in verbose_output
+
+
+def test_metadata_scalar_strings_are_not_turned_into_numbers(tmp_path, capsys):
+    """A numeric-looking metadata value is a string in the file and must stay one."""
+    header = {
+        "__metadata__": {"training_step": "5000"},
+        "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    main([path])
+
+    assert '"training_step": "5000"' in capsys.readouterr().out
+
+
+def test_no_metadata_line_wraps_beyond_the_rule_width(tmp_path, capsys):
+    """Long JSON-encoded values used to print as a single unreadable line."""
+    nested = {"key_number_{}".format(index): "value " * 12 for index in range(20)}
+    header = {
+        "__metadata__": {"architecture": json.dumps(nested)},
+        "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    main([path])
+
+    metadata_lines = capsys.readouterr().out.split("__METADATA__")[1].split("TENSORS")[0]
+    assert max(len(line) for line in metadata_lines.splitlines()) <= RULE_WIDTH
 
 
 def test_specification_violation_sets_exit_code_one_but_still_prints(file_with_a_gap, capsys):
@@ -120,7 +159,7 @@ def test_specification_violation_sets_exit_code_one_but_still_prints(file_with_a
 
     output = capsys.readouterr().out
     assert "claimed by no tensor" in output
-    assert "-- GAP --" in output
+    assert "-- unclaimed gap --" in output
     assert "HEADER JSON" in output
 
 
@@ -197,3 +236,63 @@ def test_version_is_reported(capsys):
 
     assert raised.value.code == EXIT_OK
     assert "safetensors-print" in capsys.readouterr().out
+
+
+def test_tensors_are_listed_once_in_offset_order_by_default(tmp_path, capsys):
+    """The tensor table doubles as the data buffer map, so nothing is listed twice."""
+    header = {
+        "zebra": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+        "alpha": {"dtype": "U8", "shape": [1], "data_offsets": [1, 2]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(2)))
+
+    assert main([path]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    table = output.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
+    assert table.count("zebra") == 1
+    assert table.count("alpha") == 1
+    assert table.index("zebra") < table.index("alpha")
+    assert "ordered by offset" in output
+
+
+def test_sort_by_name_reorders_the_same_single_table(tmp_path, capsys):
+    header = {
+        "zebra": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},
+        "alpha": {"dtype": "U8", "shape": [1], "data_offsets": [1, 2]},
+    }
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(2)))
+
+    assert main([path, "--sort", "name"]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    table = output.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
+    assert table.count("zebra") == 1
+    assert table.index("alpha") < table.index("zebra")
+    assert "ordered by name" in output
+
+
+def test_gaps_appear_in_place_only_when_ordered_by_offset(file_with_a_gap, capsys):
+    main([file_with_a_gap])
+    offset_table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
+
+    main([file_with_a_gap, "--sort", "name"])
+    name_table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
+
+    assert "-- unclaimed gap --" in offset_table
+    assert "-- unclaimed gap --" not in name_table
+
+
+def test_invalid_sort_order_is_a_usage_error(valid_file, capsys):
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, "--sort", "sideways"])
+
+    assert raised.value.code == EXIT_USAGE
+
+
+def test_verbose_detail_section_is_absent_by_default(valid_file, capsys):
+    main([valid_file])
+    assert "TENSOR DETAIL" not in capsys.readouterr().out
+
+    main([valid_file, "--verbose"])
+    assert "TENSOR DETAIL" in capsys.readouterr().out

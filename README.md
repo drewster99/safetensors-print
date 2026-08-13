@@ -22,18 +22,30 @@ python3 -m safetensors_print model.safetensors
 ## Usage
 
 ```
-safetensors-print <filename.safetensors> [--verbose | --json-only | --help]
+safetensors-print <filename.safetensors> [--verbose | --json-only] [--sort offset|name]
 ```
 
 | Option | Effect |
 | --- | --- |
-| *(none)* | Full dump: file layout, integrity checks, issues, metadata, tensor table, dtype summary, data segment map, header JSON |
-| `--verbose` | Adds decoded leading element values, hex dumps of the head and tail of every data segment, absolute file offsets, and expansion of metadata values that themselves contain JSON |
+| *(none)* | Full dump: file layout, integrity checks, issues, metadata, tensor table, dtype summary, header JSON |
+| `--verbose` | Adds a `TENSOR DETAIL` section: decoded leading element values, hex dumps of the head and tail of every segment, and absolute file offsets |
+| `--sort offset\|name` | Order of the `TENSORS` table. `offset` (default) lays out the data buffer and shows unclaimed gaps in place; `name` sorts alphabetically |
 | `--json-only` | Prints only the header JSON, pretty-printed with sorted keys |
 | `--version` | Prints the version |
 | `--help` | Usage |
 
 `--verbose` and `--json-only` are mutually exclusive.
+
+The `TENSORS` table is the only listing of tensors. Ordered by offset it doubles as the
+map of the data buffer, with any unclaimed gaps shown in place, so no tensor is ever
+printed twice.
+
+`__METADATA__` prints as one JSON object with keys sorted. The format permits only
+string values, so model configurations are routinely stored as JSON-encoded strings;
+those are expanded in place and annotated rather than printed as a single escaped line
+hundreds of characters wide. The verbatim form of every value stays in the
+`HEADER JSON` section, so nothing is lost. Numeric-looking values such as `"5000"` are
+strings in the file and are shown as strings.
 
 ### Exit codes
 
@@ -77,6 +89,21 @@ INTEGRITY
   Overlaps                        none
   Header sorted by data_offsets   no (specification recommends sorted)
   Size/shape/dtype agreement      110 agree
+```
+
+`__METADATA__`, with a JSON-encoded value expanded in place:
+
+```
+{
+  "architecture": {  /* stored as a JSON-encoded string, shown decoded */
+    "activation_function": "relu",
+    "compute_data_type": "bfloat16",
+    "input_encoding": "basic30",
+    "value_head_style": "wdl_softmax"
+  },
+  "built_by_git": "085356f",
+  "training_step": "5000"
+}
 ```
 
 Under `--verbose`, each segment is described individually:
