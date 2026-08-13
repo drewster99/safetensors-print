@@ -22,6 +22,7 @@ import concurrent.futures
 import itertools
 import json
 import os
+import shlex
 import struct
 import subprocess
 import sys
@@ -39,24 +40,13 @@ EXIT_UNREADABLE = 3
 RULE = "=" * 100
 
 
-class Case:
-    """One invocation and what it is expected to produce."""
-
-    def __init__(self, arguments: Sequence[str], description: str):
-        self.arguments = list(arguments)
-        self.description = description
-
-    def __repr__(self) -> str:
-        return " ".join(self.arguments)
-
-
 def powerset(items: Sequence[str]):
     for size in range(len(items) + 1):
         for combination in itertools.combinations(items, size):
             yield list(combination)
 
 
-def option_cases() -> List[Case]:
+def option_cases() -> List[List[str]]:
     """Every combination of the options that take a file, valid or not."""
     cases = []
     for sections in powerset(SECTION_FLAGS):
@@ -67,14 +57,14 @@ def option_cases() -> List[Case]:
                     arguments.append("--verbose")
                 if sort is not None:
                     arguments += ["--sort", sort]
-                cases.append(Case(arguments, "sections"))
+                cases.append(arguments)
 
     for form in METADATA_FORMS:
-        cases.append(Case([form], "metadata"))
+        cases.append([form])
         for conflicting in SECTION_FLAGS + ["--verbose"]:
-            cases.append(Case([form, conflicting], "metadata conflict"))
-        cases.append(Case([form, "--sort", "name"], "metadata conflict"))
-    cases.append(Case(METADATA_FORMS, "metadata conflict"))
+            cases.append([form, conflicting])
+        cases.append([form, "--sort", "name"])
+    cases.append(list(METADATA_FORMS))
     return cases
 
 
@@ -190,7 +180,9 @@ def display_path(path: str) -> str:
     return path if relative.startswith("..") else relative
 
 
-def check_file(command: Sequence[str], path: str, cases: Sequence[Case]) -> Tuple[List[str], int]:
+def check_file(
+    command: Sequence[str], path: str, cases: Sequence[Sequence[str]]
+) -> Tuple[List[str], int]:
     """Run every case against one file, returning its failures and how many runs it took."""
     failures: List[str] = []
     header = read_header_independently(path)
@@ -203,15 +195,14 @@ def check_file(command: Sequence[str], path: str, cases: Sequence[Case]) -> Tupl
         failures.append("{}: unreadable file exited {}, wanted 3".format(path, baseline_code))
 
     for case in cases:
-        arguments = [path] + case.arguments
-        code, output, errors = run(command, arguments)
-        label = "{} {}".format(os.path.basename(path), " ".join(case.arguments) or "(no options)")
+        code, output, errors = run(command, [path] + list(case))
+        label = "{} {}".format(os.path.basename(path), " ".join(case) or "(no options)")
 
         if "Traceback (most recent call last)" in errors:
             failures.append("{}: traceback\n{}".format(label, errors.strip()[:400]))
             continue
 
-        if is_usage_error(case.arguments):
+        if is_usage_error(case):
             if code != EXIT_USAGE:
                 failures.append("{}: expected usage error, exited {}".format(label, code))
             elif output:
@@ -234,7 +225,7 @@ def check_file(command: Sequence[str], path: str, cases: Sequence[Case]) -> Tupl
                 "{}: exited {}, but the file itself exits {}".format(label, code, baseline_code)
             )
 
-        metadata_form = next((form for form in METADATA_FORMS if form in case.arguments), None)
+        metadata_form = next((form for form in METADATA_FORMS if form in case), None)
         if metadata_form is not None:
             try:
                 parsed = json.loads(output)
@@ -249,7 +240,7 @@ def check_file(command: Sequence[str], path: str, cases: Sequence[Case]) -> Tupl
             continue
 
         titles = printed_section_titles(output)
-        wanted_titles = expected_section_titles(case.arguments)
+        wanted_titles = expected_section_titles(case)
         if titles != wanted_titles:
             failures.append("{}: printed {}, wanted {}".format(label, titles, wanted_titles))
         if not output.strip():
@@ -296,7 +287,7 @@ def check_command_line_errors(command: Sequence[str], sample: str) -> Tuple[List
     # A closed pipe is a normal end of output, not a crash.
     piped = subprocess.run(
         "{} {} | head -2".format(
-            " ".join(command), sample.replace(" ", "\\ ")
+            " ".join(shlex.quote(word) for word in command), shlex.quote(sample)
         ),
         shell=True,
         stdout=subprocess.PIPE,

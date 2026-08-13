@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import struct
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from .dtypes import MAX_HEADER_SIZE, DType, dtype_named
@@ -139,6 +140,20 @@ class Overlap:
         return self.end - self.begin
 
 
+class MetadataDeclaration(Enum):
+    """How the file declares `__metadata__`.
+
+    Decided once, here, because three different places need to say something about it
+    and they must not each reach their own conclusion from the raw header.
+    """
+
+    ABSENT = "absent"
+    NULL = "null"
+    NOT_AN_OBJECT = "not an object"
+    EMPTY = "empty"
+    PRESENT = "present"
+
+
 @dataclass
 class Report:
     """The complete description of one safetensors file."""
@@ -149,6 +164,7 @@ class Report:
     header_padding_bytes: bytes
     header: Dict[str, Any]
     metadata: Dict[str, str]
+    metadata_declaration: MetadataDeclaration
     non_string_metadata_keys: Tuple[str, ...]
     tensors: List[TensorEntry]
     unparsable_entries: Dict[str, Any]
@@ -325,13 +341,29 @@ def _coverage(tensors: Sequence[TensorEntry], data_buffer_size: int) -> Tuple[Li
     return gaps, overlaps
 
 
-def _validate_metadata(header: Dict[str, Any], issues: List[Issue]) -> Tuple[Dict[str, str], Tuple[str, ...]]:
-    raw_metadata = header.get(METADATA_KEY)
+def _validate_metadata(
+    header: Dict[str, Any], issues: List[Issue]
+) -> Tuple[Dict[str, str], MetadataDeclaration, Tuple[str, ...]]:
+    if METADATA_KEY not in header:
+        return {}, MetadataDeclaration.ABSENT, ()
+
+    # Tested for membership rather than for None so that a declared `null` is still
+    # mentioned. The reference implementation deserializes it to "no metadata" and reads
+    # the file happily, so it is a remark about the declaration, not a fault in the file.
+    raw_metadata = header[METADATA_KEY]
     if raw_metadata is None:
-        return {}, ()
+        issues.append(
+            Issue(
+                WARNING,
+                "__metadata__ is declared as null rather than omitted; readers treat the "
+                "two alike",
+            )
+        )
+        return {}, MetadataDeclaration.NULL, ()
+
     if not isinstance(raw_metadata, dict):
         issues.append(Issue(ERROR, "__metadata__ is present but is not a JSON object"))
-        return {}, ()
+        return {}, MetadataDeclaration.NOT_AN_OBJECT, ()
 
     metadata: Dict[str, str] = {}
     non_string_keys: List[str] = []
@@ -348,7 +380,8 @@ def _validate_metadata(header: Dict[str, Any], issues: List[Issue]) -> Tuple[Dic
                     "value to be a string".format(key, type(value).__name__),
                 )
             )
-    return metadata, tuple(non_string_keys)
+    declaration = MetadataDeclaration.PRESENT if metadata else MetadataDeclaration.EMPTY
+    return metadata, declaration, tuple(non_string_keys)
 
 
 def read_report(path: str) -> Report:
@@ -422,12 +455,18 @@ def read_report(path: str) -> Report:
             "{}: header is a JSON {}, but must be an object".format(path, type(header).__name__)
         )
 
+    # JSON says names SHOULD be unique rather than MUST, and the reference implementation
+    # takes the last occurrence and loads the file. A warning, then -- but a loud one,
+    # since the entry that lost is gone without trace.
     for key in duplicate_keys:
         issues.append(
-            Issue(ERROR, "header contains duplicate key {!r}; only the last occurrence survives".format(key))
+            Issue(
+                WARNING,
+                "header contains duplicate key {!r}; only the last occurrence survives".format(key),
+            )
         )
 
-    metadata, non_string_metadata_keys = _validate_metadata(header, issues)
+    metadata, metadata_declaration, non_string_metadata_keys = _validate_metadata(header, issues)
     tensors, unparsable_entries = _collect_tensors(header, issues)
 
     data_buffer_begin = header_json_end
@@ -495,6 +534,7 @@ def read_report(path: str) -> Report:
         header_padding_bytes=header_padding_bytes,
         header=header,
         metadata=metadata,
+        metadata_declaration=metadata_declaration,
         non_string_metadata_keys=non_string_metadata_keys,
         tensors=tensors,
         unparsable_entries=unparsable_entries,

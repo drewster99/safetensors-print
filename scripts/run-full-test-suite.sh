@@ -71,4 +71,13 @@ heading "4. option matrix"
   --command "${PYTHON} -m safetensors_print" \
   "${corpus_parts[@]}"
 
+heading "5. agreement with the reference implementation"
+if "${PYTHON}" -c "import safetensors" 2>/dev/null; then
+  "${PYTHON}" "${REPOSITORY_ROOT}/scripts/compare-with-reference.py" \
+    --command "${PYTHON} -m safetensors_print" \
+    "${corpus_parts[@]}"
+else
+  printf 'skipped: the safetensors package is not installed (pip install -e ".[reference]")\n'
+fi
+
 heading "all green"

@@ -47,9 +47,7 @@ jobs:
         run: python scripts/make-synthetic-corpus.py
 
       - name: Run every option combination
-        run: |
-          python scripts/run-option-matrix.py tests/corpus/synthetic \
-            --command "$(which safetensors-print)"
+        run: python scripts/run-option-matrix.py tests/corpus/synthetic --command safetensors-print
 
   package:
     runs-on: ubuntu-latest

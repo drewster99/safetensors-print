@@ -8,13 +8,14 @@ import sys
 from typing import FrozenSet, Iterable, List, Optional, TextIO
 
 from . import __version__
-from .reader import METADATA_KEY, SafetensorsFormatError, read_report
+from .reader import SafetensorsFormatError, read_report
 from .render import (
     ALL_SECTIONS,
     SORT_BY_OFFSET,
     SORT_ORDERS,
     Section,
     expanded_json_text,
+    nothing_to_show_explanation,
     pretty_header_json,
     render_report,
 )
@@ -196,11 +197,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return EXIT_UNREADABLE
 
     if arguments.metadata or arguments.metadata_raw:
-        if METADATA_KEY not in report.header:
-            print(
-                "safetensors-print: {} declares no {} key".format(arguments.filename, METADATA_KEY),
-                file=sys.stderr,
-            )
+        # An empty object on stdout is a fact about the file, not an absence of output,
+        # so whichever reason produced it is said out loud, in the dump's own words.
+        explanation = nothing_to_show_explanation(report.metadata_declaration)
+        if explanation is not None:
+            print("safetensors-print: {}: {}".format(arguments.filename, explanation), file=sys.stderr)
         render_metadata = pretty_header_json if arguments.metadata_raw else expanded_json_text
         _write_lines([render_metadata(report.metadata)], sys.stdout)
     else:

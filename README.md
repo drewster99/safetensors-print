@@ -54,8 +54,9 @@ dump regardless of the order they are given in:
 safetensors-print model.safetensors --summary --issues
 ```
 
-`--verbose` belongs to the tensors output, so it is rejected alongside a selection that
-excludes `--tensors`, rather than being silently ignored.
+`--verbose` and `--sort` belong to the tensors output, so they are rejected alongside a
+selection that excludes `--tensors`, rather than being silently ignored. Both are
+accepted when no section is selected, since the full dump prints the tensors.
 
 ### Reading the metadata
 
@@ -78,8 +79,9 @@ reproducing what the file holds:
 safetensors-print model.safetensors --metadata-raw | jq -r .architecture | jq .
 ```
 
-Both print `{}` and note it on stderr when the file declares no metadata, so a pipeline
-never receives empty input.
+Both print `{}` rather than nothing when there is no metadata to print, so a pipeline
+never receives empty input, and both say why on stderr: the file declares no
+`__metadata__` key, or declares one that is not a JSON object.
 
 The `TENSORS` table is the only listing of tensors. Ordered by offset it doubles as the
 map of the data buffer, with any unclaimed gaps shown in place, so no tensor is ever
@@ -93,7 +95,7 @@ are expanded in place and annotated `/* stored as a JSON-encoded string, shown d
 Numeric-looking values such as `"5000"` are strings in the file and stay strings.
 
 That annotation makes the dump readable but not machine-parsable, which is why
-`--metadata` and `--metadata-raw` expand without annotating.
+`--metadata` expands without annotating and `--metadata-raw` does not expand at all.
 
 ### Exit codes
 
@@ -185,11 +187,11 @@ Only damage that makes the header unreadable stops the run (exit 3):
   enforces — refused before the read, since the declared size is untrusted input and
   honouring it would allocate that much memory
 
-Everything else is reported and the dump continues (exit 1):
+Errors are reported and the dump continues (exit 1):
 
 - Header does not begin with `{` (0x7B)
 - Header padding contains bytes other than spaces (0x20)
-- Duplicate keys in the header
+- `__metadata__` declared as something other than an object
 - `__metadata__` values that are not strings
 - Entries missing or malforming `dtype`, `shape` or `data_offsets`
 - Shapes with negative or non-integer dimensions
@@ -198,8 +200,19 @@ Everything else is reported and the dump continues (exit 1):
 - Sizes that disagree with what the shape and dtype imply
 - Holes in the data buffer, and regions claimed by more than one tensor
 - Sub-byte dtypes whose element count is not a whole number of bytes
-- Tensors not listed in ascending `data_offsets` order (a warning; the specification
-  recommends sorting but readers tolerate it)
+
+Warnings are reported and the run still succeeds (exit 0). Each of these is something
+the reference implementation loads without complaint, so failing the file over it would
+put the exit code at odds with every other reader:
+
+- Tensors not listed in ascending `data_offsets` order; the specification recommends
+  sorting but readers tolerate it
+- Duplicate keys in the header; JSON says names *should* be unique, and readers keep the
+  last occurrence, so the entry that lost is gone without trace
+- `__metadata__` declared as `null`, which readers treat as no metadata at all
+
+`scripts/compare-with-reference.py` keeps that distinction honest by checking each
+verdict against the `safetensors` package itself.
 
 ## Supported dtypes
 
@@ -273,6 +286,22 @@ failure whichever side is wrong. It can also test an installed build:
 ```sh
 .venv/bin/python scripts/run-option-matrix.py --command safetensors-print tests/corpus
 ```
+
+### Checking against the reference implementation
+
+`scripts/compare-with-reference.py` runs the `safetensors` package over the same corpus
+and compares verdicts:
+
+```sh
+.venv/bin/pip install -e ".[reference]"
+.venv/bin/python scripts/compare-with-reference.py tests/corpus
+```
+
+The two answer different questions — it answers "can I load this?", we answer "what does
+this file say about itself?" — so they part company on damaged files by design. One
+invariant is asserted: nothing we refuse to read may be readable by the reference. Files
+we merely object to while the reference loads them are listed for review rather than
+failed, because that judgement is what the exit code means and it should be deliberate.
 
 ## Releasing
 

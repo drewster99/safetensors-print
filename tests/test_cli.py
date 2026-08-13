@@ -397,6 +397,54 @@ def test_either_metadata_form_on_a_file_without_metadata_prints_an_empty_object(
     assert "declares no __metadata__ key" in captured.err
 
 
+@pytest.mark.parametrize("declaration", [[1, 2, 3], "a string", 7])
+def test_metadata_that_is_not_an_object_is_explained_rather_than_printed_as_empty(
+    tmp_path, capsys, declaration
+):
+    """An empty object on stdout is a fact about the file, so its reason is stated."""
+    header = {"__metadata__": declaration, "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    assert main([path, "--metadata"]) == EXIT_SPECIFICATION_VIOLATIONS
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {}
+    assert "is not a JSON object" in captured.err
+    assert "declares no __metadata__ key" not in captured.err
+
+
+def test_metadata_declared_as_null_is_remarked_on_but_is_not_a_failure(tmp_path, capsys):
+    """The reference implementation reads `"__metadata__": null` as no metadata at all.
+
+    Reporting it as an error would fail a file every other reader accepts, so it is a
+    warning: worth saying, not worth a non-zero exit.
+    """
+    header = {"__metadata__": None, "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    assert main([path, "--issues"]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    assert "WARNING" in output
+    assert "declared as null" in output
+
+    assert main([path, "--metadata"]) == EXIT_OK
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {}
+    assert "declared as null" in captured.err
+
+
+def test_the_metadata_section_does_not_call_a_malformed_declaration_empty(tmp_path, capsys):
+    header = {"__metadata__": [1, 2, 3], "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}
+    path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
+
+    main([path])
+
+    metadata_section = capsys.readouterr().out.split("__METADATA__")[1].split("TENSORS")[0]
+    assert "is not a JSON object" in metadata_section
+    assert "present but empty" not in metadata_section
+
+
 def test_the_two_metadata_forms_are_mutually_exclusive(valid_file, capsys):
     with pytest.raises(SystemExit) as raised:
         main([valid_file, "--metadata", "--metadata-raw"])

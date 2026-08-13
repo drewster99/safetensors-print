@@ -37,6 +37,9 @@ safetensors-print = "safetensors_print.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+# For scripts/compare-with-reference.py only: the tool itself has no dependencies, and
+# nothing under src/ may import these.
+reference = ["safetensors>=0.4", "numpy"]
 
 [tool.hatch.version]
 path = "src/safetensors_print/__init__.py"

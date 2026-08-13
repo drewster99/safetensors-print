@@ -13,8 +13,8 @@ from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence
 
 from .dtypes import decoder_for
 from .reader import (
-    METADATA_KEY,
     Gap,
+    MetadataDeclaration,
     Report,
     SegmentReader,
     TensorEntry,
@@ -247,7 +247,13 @@ def _render_integrity_section(report: Report) -> Iterator[str]:
     yield from section("INTEGRITY")
     yield labelled("Header entries", "{:,}".format(len(report.header)))
     yield labelled("Tensors", "{:,}".format(len(report.tensors)))
-    yield labelled("__metadata__ present", "yes ({:,} keys)".format(len(report.metadata)) if METADATA_KEY in report.header else "no")
+    if report.metadata_declaration is MetadataDeclaration.PRESENT:
+        metadata_state = "yes ({:,} keys)".format(len(report.metadata))
+    elif report.metadata_declaration is MetadataDeclaration.ABSENT:
+        metadata_state = "no"
+    else:
+        metadata_state = report.metadata_declaration.value
+    yield labelled("__metadata__ present", metadata_state)
     yield labelled("Unparsable header entries", "{:,}".format(len(report.unparsable_entries)))
     yield labelled("Duplicate header keys", "{:,}".format(len(report.duplicate_header_keys)))
     yield labelled(
@@ -294,13 +300,26 @@ def _render_issues_section(report: Report) -> Iterator[str]:
         yield "  {}  {}".format(issue.severity.upper().ljust(label_width), issue.message)
 
 
+# Why there is no metadata to print, said the same way wherever it is said. A
+# declaration absent from this mapping is one that has metadata to show.
+_NOTHING_TO_SHOW = {
+    MetadataDeclaration.ABSENT: "The file declares no __metadata__ key.",
+    MetadataDeclaration.NULL: "__metadata__ is declared as null, which readers treat as absent.",
+    MetadataDeclaration.NOT_AN_OBJECT: "__metadata__ is present but is not a JSON object.",
+    MetadataDeclaration.EMPTY: "__metadata__ is present but empty.",
+}
+
+
+def nothing_to_show_explanation(declaration: MetadataDeclaration) -> Optional[str]:
+    """Why a file has no metadata to print, or None when it has some."""
+    return _NOTHING_TO_SHOW.get(declaration)
+
+
 def _render_metadata_section(report: Report) -> Iterator[str]:
     yield from section("__METADATA__")
-    if METADATA_KEY not in report.header:
-        yield "  The file declares no __metadata__ key."
-        return
-    if not report.metadata:
-        yield "  __metadata__ is present but empty."
+    explanation = nothing_to_show_explanation(report.metadata_declaration)
+    if explanation is not None:
+        yield "  " + explanation
         return
     yield from _render_metadata_json(report)
 

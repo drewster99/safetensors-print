@@ -70,7 +70,9 @@ def every_dtype() -> bytes:
         size = elements * bits // 8
         header[name.lower()] = entry(name, [elements], offset, offset + size)
         offset += size
-    return file_bytes(header, bytes(range(256))[:offset])
+    # The buffer must cover every byte claimed above: a short one would make this a
+    # file with a hole in it, which is a different case, tested separately.
+    return file_bytes(header, bytes(index % 256 for index in range(offset)))
 
 
 def deeply_encoded() -> bytes:
@@ -157,6 +159,12 @@ CASES = {
     "violation-non-string-metadata": lambda: file_bytes(
         {"__metadata__": {"step": 5000, "flag": True}, "w": entry("U8", [1], 0, 1)}, b"\x00"
     ),
+    "violation-metadata-not-object": lambda: file_bytes(
+        {"__metadata__": [1, 2, 3], "w": entry("U8", [1], 0, 1)}, b"\x00"
+    ),
+    "violation-metadata-null": lambda: file_bytes(
+        {"__metadata__": None, "w": entry("U8", [1], 0, 1)}, b"\x00"
+    ),
     "violation-negative-shape": lambda: file_bytes({"w": entry("F32", [-2], 0, 8)}, bytes(8)),
     "violation-reversed-offsets": lambda: file_bytes({"w": entry("U8", [1], 4, 2)}, bytes(8)),
     "violation-offsets-past-buffer": lambda: file_bytes({"w": entry("U8", [64], 0, 64)}, bytes(8)),
@@ -167,9 +175,12 @@ CASES = {
     "violation-bad-padding": lambda: file_bytes(
         {"w": entry("U8", [1], 0, 1)}, b"\x00", padding=b"\x00\x00"
     ),
-    "violation-duplicate-keys": lambda: struct.pack("<Q", 88)
-    + b'{"w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}, "w": {"dtype": "U8",'
-    + b' "sh": 1}}'
+    # Written by hand because json.dumps cannot produce a duplicate key. The length is
+    # measured rather than counted, since a wrong one would test truncation instead.
+    "violation-duplicate-keys": lambda: file_bytes_raw(
+        b'{"w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},'
+        b' "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}'
+    )
     + b"\x00",
     # Files whose header cannot be read at all.
     "unreadable-empty": lambda: b"",

@@ -102,6 +102,11 @@ def test_non_string_metadata_value_is_an_error(tmp_path):
 
 
 def test_duplicate_header_keys_are_reported(tmp_path):
+    """A warning, not an error: JSON says names SHOULD be unique, and readers cope.
+
+    The reference implementation loads such a file, keeping the last occurrence, so
+    failing it here would make the exit code disagree with every other reader.
+    """
     raw_header = (
         b'{"w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]},'
         b' "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}'
@@ -111,7 +116,8 @@ def test_duplicate_header_keys_are_reported(tmp_path):
     report = read_report(path)
 
     assert report.duplicate_header_keys == ("w",)
-    assert any("duplicate key" in message for message in _messages(report, ERROR))
+    assert any("duplicate key" in message for message in _messages(report, WARNING))
+    assert not report.has_errors
 
 
 def test_gap_in_data_buffer_is_reported(tmp_path):
