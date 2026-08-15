@@ -430,7 +430,9 @@ update_tap() {
   fi
   git -C "$checkout" add "Formula/${PROJECT_NAME}.rb"
   git -C "$checkout" commit --quiet -m "${PROJECT_NAME} ${NEW_VERSION}"
-  git -C "$checkout" push --quiet
+  # -u origin HEAD rather than a bare push, so this also works the first time, against a
+  # tap whose branch has no upstream yet.
+  git -C "$checkout" push --quiet -u origin HEAD
 
   log "Verifying the formula reached the tap"
   local published
