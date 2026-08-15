@@ -109,10 +109,23 @@ PYTHON
 
 next_patch_version() {
   "$PYTHON" - "$1" <<'PYTHON'
-import sys
-major, minor, patch = (int(part) for part in sys.argv[1].split("."))
-print("{}.{}.{}".format(major, minor, patch + 1))
+import re, sys
+
+# A pre-release is a rehearsal for the version it is attached to, so what follows
+# 0.1.0rc1 is 0.1.0, not 0.1.1.
+match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)((?:a|b|rc)\d+)?", sys.argv[1])
+if not match:
+    raise SystemExit("cannot bump {!r}: expected N.N.N with an optional a/b/rc suffix".format(sys.argv[1]))
+major, minor, patch, pre_release = match.groups()
+if pre_release:
+    print("{}.{}.{}".format(major, minor, patch))
+else:
+    print("{}.{}.{}".format(major, minor, int(patch) + 1))
 PYTHON
+}
+
+is_pre_release() {
+  [[ "$1" =~ (a|b|rc)[0-9]+$ ]]
 }
 
 write_version() {
@@ -330,10 +343,17 @@ git push origin "$TAG"
 
 log "Creating the GitHub release"
 NOTES_FILE="$(release_notes)"
+RELEASE_FLAGS=()
+# A pre-release must not become the "Latest" release people land on, and pip will not
+# install one unless it is asked for by name, so the two agree about what it is.
+if is_pre_release "$NEW_VERSION"; then
+  RELEASE_FLAGS+=(--prerelease)
+fi
 gh release create "$TAG" "$SDIST" "$WHEEL" "$ZIPAPP" \
   --repo "$REPO_SLUG" \
   --title "${PROJECT_NAME} ${NEW_VERSION}" \
-  --notes-file "$NOTES_FILE"
+  --notes-file "$NOTES_FILE" \
+  "${RELEASE_FLAGS[@]+"${RELEASE_FLAGS[@]}"}"
 
 log "Verifying the release and its assets"
 RELEASE_JSON="$(gh release view "$TAG" --repo "$REPO_SLUG" --json tagName,url,assets)"
@@ -426,6 +446,12 @@ update_tap() {
 if [[ "$SKIP_TAP" -eq 1 ]]; then
   log "Skipping the Homebrew tap"
   tap_instructions
+elif is_pre_release "$NEW_VERSION"; then
+  # GitHub marks it a pre-release and pip will not install it unasked. Homebrew has no
+  # such notion: whatever is in the tap is what `brew install` serves. So the tap keeps
+  # pointing at the last real release, and the three channels agree.
+  log "Leaving the tap on the last full release"
+  echo "${NEW_VERSION} is a pre-release; the formula for it is at ${FORMULA} if you want it."
 else
   update_tap
 fi
