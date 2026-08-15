@@ -458,6 +458,6 @@ fi
 
 success "Published ${PROJECT_NAME} ${NEW_VERSION}"
 echo "Release: https://github.com/${REPO_SLUG}/releases/tag/${TAG}"
-echo
-echo "PyPI:    publish.yml is running now; check with"
-echo "           gh run list --repo ${REPO_SLUG} --workflow publish.yml"
+if [[ "$SKIP_PYPI" -eq 0 ]]; then
+  echo "PyPI:    https://pypi.org/project/${PROJECT_NAME}/${NEW_VERSION}/"
+fi
