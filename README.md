@@ -338,10 +338,15 @@ attached, and verifies the release and its assets exist.
 It refuses to start on a dirty tree, off `main`, behind `origin`, or on a version whose
 tag or release already exists.
 
-**PyPI** publishes itself: `.github/workflows/publish.yml` runs on the published
-release, using trusted publishing, so no API token is stored anywhere. It needs a
-one-time pending publisher configured on PyPI (owner `drewster99`, repository
-`safetensors-print`, workflow `publish.yml`, environment `pypi`).
+**PyPI** is uploaded from the same script with `twine`, using whatever credentials
+`twine` finds — a token in the keyring, or `~/.pypirc`. It waits until PyPI actually
+serves the new version before moving on. Nothing publishes from CI, so no repository
+secret and no trusted-publisher configuration exists to get out of step.
+
+PyPI is the only irreversible step here: a version number is spent the moment it is
+accepted, and can never be replaced. So credentials are checked in the preflight rather
+than discovered at the end, the upload runs after the GitHub release is safely out, and
+a failure prints the exact command to finish by hand instead of inviting a re-run.
 
 **Homebrew** needs its tap created once, ever:
 

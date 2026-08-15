@@ -12,16 +12,17 @@ set -Eeuo pipefail
 #     that fails to build
 #   - writes a Homebrew formula pinned to the sdist's digest
 #   - commits the version bump, tags it, pushes, creates and verifies the GitHub release
+#   - uploads to PyPI with twine and waits until PyPI serves the new version
 #   - commits that formula to the Homebrew tap, and reads it back to confirm it landed
 #
-# Publishing to PyPI is not done here: .github/workflows/publish.yml runs on the
-# published release, via trusted publishing, so no token lives on this machine.
+# Everything is published from this machine; nothing is left to CI.
 #
 # Examples:
 #   ./release.sh                     # 0.1.0 -> 0.1.1, publish
 #   ./release.sh --version 0.1.0     # hold the version (first release)
-#   ./release.sh --dry-run           # build and verify locally; no commit/tag/push/release
+#   ./release.sh --dry-run           # build and verify locally; publish nothing
 #   ./release.sh --skip-github       # same, but keeps the version bump
+#   ./release.sh --skip-pypi         # publish the release, leave PyPI alone
 #   ./release.sh --skip-tap          # publish the release, leave the tap alone
 #   ./release.sh --yes               # skip the confirmation prompt
 
@@ -42,11 +43,12 @@ PYTHON="${PYTHON:-${ROOT_DIRECTORY}/.venv/bin/python}"
 OVERRIDE_VERSION=""
 DRY_RUN=0
 SKIP_GITHUB=0
+SKIP_PYPI=0
 SKIP_TAP=0
 YES=0
 
 usage() {
-  sed -n '3,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n "3,27p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 log() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
@@ -62,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     --version) OVERRIDE_VERSION="${2:-}"; [[ -n "$OVERRIDE_VERSION" ]] || fail "--version needs a value"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --skip-github) SKIP_GITHUB=1; shift ;;
+    --skip-pypi) SKIP_PYPI=1; shift ;;
     --skip-tap) SKIP_TAP=1; shift ;;
     --yes|-y) YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -76,6 +79,22 @@ require_command gh
 "$PYTHON" -c "import build, twine" 2>/dev/null ||
   fail "build and twine are needed: ${PYTHON} -m pip install -e '.[dev]'"
 success "git, gh, and $("$PYTHON" --version)"
+
+if [[ "$DRY_RUN" -eq 0 && "$SKIP_GITHUB" -eq 0 && "$SKIP_PYPI" -eq 0 ]]; then
+  # Looked for now rather than after everything else has been published, because PyPI is
+  # the one step that cannot be redone: the version number is spent once it is accepted.
+  if "$PYTHON" -c "import keyring, sys; sys.exit(0 if keyring.get_password('https://upload.pypi.org/legacy/', '__token__') else 1)" 2>/dev/null; then
+    success "PyPI token found in the keyring"
+  elif [[ -f "${HOME}/.pypirc" ]]; then
+    mode="$(stat -f '%A' "${HOME}/.pypirc" 2>/dev/null || stat -c '%a' "${HOME}/.pypirc")"
+    if [[ "$mode" != "600" ]]; then
+      printf '\033[33mwarning: ~/.pypirc is mode %s and holds an upload token; chmod 600 ~/.pypirc\033[0m\n' "$mode"
+    fi
+    success "PyPI credentials found in ~/.pypirc"
+  else
+    fail "no PyPI credentials: expected a token in the keyring or in ~/.pypirc"
+  fi
+fi
 
 current_version() {
   "$PYTHON" - "$VERSION_FILE" <<'PYTHON'
@@ -325,6 +344,37 @@ for asset in "$SDIST" "$WHEEL" "$ZIPAPP"; do
   printf '%s' "$RELEASE_JSON" | grep -q "$(basename "$asset")" ||
     fail "release verification failed: $(basename "$asset") was not attached"
 done
+
+publish_to_pypi() {
+  log "Uploading to PyPI"
+  # --skip-existing so a half-finished upload can be run again. A version number on PyPI
+  # is spent the moment it is accepted: it can never be replaced, only added to.
+  "$PYTHON" -m twine upload --skip-existing "$SDIST" "$WHEEL" || fail "$(cat <<MESSAGE
+twine upload failed. The GitHub release for ${TAG} is already published, so do not
+re-run this script. Finish the upload by hand with:
+  ${PYTHON} -m twine upload --skip-existing ${SDIST} ${WHEEL}
+MESSAGE
+)"
+
+  log "Waiting for PyPI to serve ${NEW_VERSION}"
+  local attempt
+  for attempt in 1 2 3 4 5 6; do
+    if curl -sf "https://pypi.org/pypi/${PROJECT_NAME}/${NEW_VERSION}/json" >/dev/null; then
+      success "PyPI serves ${PROJECT_NAME} ${NEW_VERSION}"
+      return 0
+    fi
+    printf '  not visible yet (%d/6), retrying in 5s\n' "$attempt"
+    sleep 5
+  done
+  fail "PyPI never served ${NEW_VERSION}; check https://pypi.org/project/${PROJECT_NAME}/"
+}
+
+if [[ "$SKIP_PYPI" -eq 1 ]]; then
+  log "Skipping PyPI"
+  echo "Upload later with: ${PYTHON} -m twine upload --skip-existing ${SDIST} ${WHEEL}"
+else
+  publish_to_pypi
+fi
 
 tap_instructions() {
   echo "The formula for this release is at:"
