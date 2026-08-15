@@ -343,16 +343,21 @@ release, using trusted publishing, so no API token is stored anywhere. It needs 
 one-time pending publisher configured on PyPI (owner `drewster99`, repository
 `safetensors-print`, workflow `publish.yml`, environment `pypi`).
 
-**Homebrew** is one manual step. Each release writes `build/release/safetensors-print.rb`
-pinned to that release's sdist and digest, and prints the commands to publish it to the
-tap. Creating the tap, once ever:
+**Homebrew** needs its tap created once, ever:
 
 ```sh
 gh repo create drewster99/homebrew-tap --public -d "Homebrew formulae"
 ```
 
-After that, each release is a copy, a commit and a push into that repo. Users install
-with `brew install drewster99/tap/safetensors-print`. A bare `brew install
+A tap is an ordinary public repository holding `Formula/*.rb` and nothing else — the
+tarballs stay on the releases. From then on every release updates it by itself: the
+script writes the formula pinned to that release's sdist and digest, commits it to the
+tap, and reads it back from GitHub to confirm the digest and tag that landed are the
+ones it just published. Until the tap exists the script says so and prints the formula's
+path, which is not a failed release: the tarball is out either way. `--skip-tap` opts
+out of the step.
+
+Users install with `brew install drewster99/tap/safetensors-print`. A bare `brew install
 safetensors-print` would require the formula to be in homebrew-core, which has a
 notability bar (roughly 30 forks, 30 watchers, or 75 stars) a new repository will not
 meet; the same formula works there later with `url` pointed at the PyPI sdist.

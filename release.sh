@@ -12,6 +12,7 @@ set -Eeuo pipefail
 #     that fails to build
 #   - writes a Homebrew formula pinned to the sdist's digest
 #   - commits the version bump, tags it, pushes, creates and verifies the GitHub release
+#   - commits that formula to the Homebrew tap, and reads it back to confirm it landed
 #
 # Publishing to PyPI is not done here: .github/workflows/publish.yml runs on the
 # published release, via trusted publishing, so no token lives on this machine.
@@ -21,6 +22,7 @@ set -Eeuo pipefail
 #   ./release.sh --version 0.1.0     # hold the version (first release)
 #   ./release.sh --dry-run           # build and verify locally; no commit/tag/push/release
 #   ./release.sh --skip-github       # same, but keeps the version bump
+#   ./release.sh --skip-tap          # publish the release, leave the tap alone
 #   ./release.sh --yes               # skip the confirmation prompt
 
 PROJECT_NAME="safetensors-print"
@@ -28,6 +30,8 @@ DISTRIBUTION_NAME="safetensors_print"
 REPO_SLUG="drewster99/safetensors-print"
 VERSION_FILE="src/safetensors_print/__init__.py"
 TAP_REPOSITORY="drewster99/homebrew-tap"
+# Homebrew addresses a tap by its repository name with the homebrew- prefix removed.
+TAP_NAME="${TAP_REPOSITORY##*/homebrew-}"
 
 ROOT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIRECTORY"
@@ -38,6 +42,7 @@ PYTHON="${PYTHON:-${ROOT_DIRECTORY}/.venv/bin/python}"
 OVERRIDE_VERSION=""
 DRY_RUN=0
 SKIP_GITHUB=0
+SKIP_TAP=0
 YES=0
 
 usage() {
@@ -57,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --version) OVERRIDE_VERSION="${2:-}"; [[ -n "$OVERRIDE_VERSION" ]] || fail "--version needs a value"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --skip-github) SKIP_GITHUB=1; shift ;;
+    --skip-tap) SKIP_TAP=1; shift ;;
     --yes|-y) YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown argument: $1 (try --help)" ;;
@@ -320,17 +326,62 @@ for asset in "$SDIST" "$WHEEL" "$ZIPAPP"; do
     fail "release verification failed: $(basename "$asset") was not attached"
 done
 
+tap_instructions() {
+  echo "The formula for this release is at:"
+  echo "  ${FORMULA}"
+  echo
+  echo "Create the tap once, ever:"
+  echo "  gh repo create ${TAP_REPOSITORY} --public -d 'Homebrew formulae'"
+  echo
+  echo "Every release after that updates it by itself. Users install with:"
+  echo "  brew install ${TAP_REPOSITORY%/*}/${TAP_NAME}/${PROJECT_NAME}"
+}
+
+update_tap() {
+  # The formula points at the release asset, so this can only run once the release
+  # exists. A tap that is missing is not a failed release: the tarball is published and
+  # the formula is on disk, so say what is left to do rather than exiting non-zero.
+  if ! gh repo view "$TAP_REPOSITORY" >/dev/null 2>&1; then
+    log "No tap at ${TAP_REPOSITORY} yet"
+    tap_instructions
+    return 0
+  fi
+
+  log "Updating the Homebrew tap"
+  local checkout="${BUILD_ROOT}/tap"
+  rm -rf "$checkout"
+  gh repo clone "$TAP_REPOSITORY" "$checkout" -- --quiet ||
+    fail "could not clone ${TAP_REPOSITORY}"
+  mkdir -p "${checkout}/Formula"
+  cp "$FORMULA" "${checkout}/Formula/${PROJECT_NAME}.rb"
+
+  if [[ -z "$(git -C "$checkout" status --porcelain)" ]]; then
+    fail "the tap already holds this exact formula, which cannot be right for a new release"
+  fi
+  git -C "$checkout" add "Formula/${PROJECT_NAME}.rb"
+  git -C "$checkout" commit --quiet -m "${PROJECT_NAME} ${NEW_VERSION}"
+  git -C "$checkout" push --quiet
+
+  log "Verifying the formula reached the tap"
+  local published
+  published="$(gh api "repos/${TAP_REPOSITORY}/contents/Formula/${PROJECT_NAME}.rb" \
+    --jq '.content' | base64 --decode)" || fail "could not read the formula back from the tap"
+  printf '%s' "$published" | grep -q "${SDIST_SHA256}" ||
+    fail "the formula in the tap does not carry this release's digest"
+  printf '%s' "$published" | grep -q "/download/${TAG}/" ||
+    fail "the formula in the tap does not point at ${TAG}"
+  success "tap updated: brew install ${TAP_REPOSITORY%/*}/${TAP_NAME}/${PROJECT_NAME}"
+}
+
+if [[ "$SKIP_TAP" -eq 1 ]]; then
+  log "Skipping the Homebrew tap"
+  tap_instructions
+else
+  update_tap
+fi
+
 success "Published ${PROJECT_NAME} ${NEW_VERSION}"
 echo "Release: https://github.com/${REPO_SLUG}/releases/tag/${TAG}"
 echo
 echo "PyPI:    publish.yml is running now; check with"
 echo "           gh run list --repo ${REPO_SLUG} --workflow publish.yml"
-echo
-echo "Homebrew: the formula is at ${FORMULA}."
-echo "          Publish it to the tap with:"
-echo "            gh repo create ${TAP_REPOSITORY} --public --clone -d 'Homebrew formulae for Nuclear Cyborg tools'"
-echo "            mkdir -p ${TAP_REPOSITORY#*/}/Formula"
-echo "            cp ${FORMULA} ${TAP_REPOSITORY#*/}/Formula/"
-echo "            cd ${TAP_REPOSITORY#*/} && git add . && git commit -m 'Add ${PROJECT_NAME} ${NEW_VERSION}' && git push"
-echo "          Users then run:"
-echo "            brew install ${TAP_REPOSITORY%/*}/tap/${PROJECT_NAME}"
