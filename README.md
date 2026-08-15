@@ -395,7 +395,14 @@ A tap is an ordinary public repository holding `Formula/*.rb` and nothing else â
 tarballs stay on the releases. From then on every release updates it by itself: the
 script writes the formula pinned to that release's sdist and digest, commits it to the
 tap, and reads it back from GitHub to confirm the digest and tag that landed are the
-ones it just published. Until the tap exists the script says so and prints the formula's
+ones it just published.
+
+One tap serves every project, so another project's release can land between this one's
+clone and its push. The formulae are different files and cannot conflict, but the branch
+has moved and the push is refused, which would otherwise strand a release that had
+already reached PyPI. Each attempt therefore starts from a fresh clone and writes the
+formula again rather than replaying a patch, five times before giving up: what is wanted
+is a file's contents, so recomputing it can never leave a half-merged tap behind. Until the tap exists the script says so and prints the formula's
 path, which is not a failed release: the tarball is out either way. `--skip-tap` opts
 out of the step.
 

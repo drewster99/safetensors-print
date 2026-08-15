@@ -419,20 +419,41 @@ update_tap() {
 
   log "Updating the Homebrew tap"
   local checkout="${BUILD_ROOT}/tap"
-  rm -rf "$checkout"
-  gh repo clone "$TAP_REPOSITORY" "$checkout" -- --quiet ||
-    fail "could not clone ${TAP_REPOSITORY}"
-  mkdir -p "${checkout}/Formula"
-  cp "$FORMULA" "${checkout}/Formula/${PROJECT_NAME}.rb"
+  local attempt pushed=0
 
-  if [[ -z "$(git -C "$checkout" status --porcelain)" ]]; then
-    fail "the tap already holds this exact formula, which cannot be right for a new release"
-  fi
-  git -C "$checkout" add "Formula/${PROJECT_NAME}.rb"
-  git -C "$checkout" commit --quiet -m "${PROJECT_NAME} ${NEW_VERSION}"
-  # -u origin HEAD rather than a bare push, so this also works the first time, against a
-  # tap whose branch has no upstream yet.
-  git -C "$checkout" push --quiet -u origin HEAD
+  # One tap serves every project, so another project's release can land between our
+  # clone and our push. Their formula is a different file and cannot conflict with ours,
+  # but the branch has moved, so the push is refused. Each attempt starts from a fresh
+  # clone and writes the formula again rather than replaying a patch: the wanted state
+  # is a file's contents, so recomputing it can never leave a half-merged tap behind.
+  for attempt in 1 2 3 4 5; do
+    rm -rf "$checkout"
+    gh repo clone "$TAP_REPOSITORY" "$checkout" -- --quiet ||
+      fail "could not clone ${TAP_REPOSITORY}"
+    mkdir -p "${checkout}/Formula"
+    cp "$FORMULA" "${checkout}/Formula/${PROJECT_NAME}.rb"
+
+    if [[ -z "$(git -C "$checkout" status --porcelain)" ]]; then
+      fail "the tap already holds this exact formula, which cannot be right for a new release"
+    fi
+    git -C "$checkout" add "Formula/${PROJECT_NAME}.rb"
+    git -C "$checkout" commit --quiet -m "${PROJECT_NAME} ${NEW_VERSION}"
+    # -u origin HEAD rather than a bare push, so this also works the first time, against
+    # a tap whose branch has no upstream yet.
+    if git -C "$checkout" push --quiet -u origin HEAD 2>/dev/null; then
+      pushed=1
+      break
+    fi
+    printf '  the tap moved under us, most likely another project releasing (%d/5)\n' "$attempt"
+    sleep 3
+  done
+
+  [[ "$pushed" -eq 1 ]] || fail "$(cat <<MESSAGE
+could not push to ${TAP_REPOSITORY} after 5 attempts. Everything else for ${TAG} is
+published; only the formula is missing. Add it by hand from:
+  ${FORMULA}
+MESSAGE
+)"
 
   log "Verifying the formula reached the tap"
   local published
