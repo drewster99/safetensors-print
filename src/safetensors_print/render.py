@@ -47,6 +47,10 @@ class Section(Enum):
 
 ALL_SECTIONS = frozenset(Section)
 
+# What a bare invocation prints: whether the file holds together, and what is wrong with
+# it if anything. The tensor table and the header are asked for when they are wanted.
+DEFAULT_SECTIONS = frozenset({Section.SUMMARY, Section.ISSUES})
+
 _BINARY_UNITS = ("bytes", "KiB", "MiB", "GiB", "TiB", "PiB")
 
 

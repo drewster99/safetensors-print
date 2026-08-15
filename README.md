@@ -23,17 +23,18 @@ python3 -m safetensors_print model.safetensors
 
 ```
 safetensors-print <filename.safetensors> [--summary] [--issues] [--tensors] [--header]
-                  [--verbose] [--sort offset|name]
+                  [--all] [--verbose] [--sort offset|name]
 safetensors-print <filename.safetensors> (--metadata | --metadata-raw)
 ```
 
 | Option | Effect |
 | --- | --- |
-| *(none)* | Full dump: every section below, plus `__METADATA__` |
+| *(none)* | The same as `--summary --issues`: how the file is laid out, whether it holds together, and what is wrong with it if anything |
 | `--summary` | `FILE`, `INTEGRITY` and `DTYPE SUMMARY`: the layout, whether the header holds together, and the per-dtype totals |
 | `--issues` | `ISSUES`: every departure from the specification |
 | `--tensors` | `TENSORS`: one row per tensor, plus any unclaimed gap |
 | `--header` | `HEADER JSON`: the whole header, keys sorted, encoded values expanded and annotated |
+| `--all` | Every section, `__METADATA__` included. Not combinable with the individual section flags |
 | `--verbose` | Adds `TENSOR DETAIL` to the tensors output: decoded leading element values, hex dumps of the head and tail of every segment, and absolute file offsets |
 | `--sort offset\|name` | Order of the `TENSORS` table. `offset` (default) lays out the data buffer and shows unclaimed gaps in place; `name` sorts alphabetically |
 | `--metadata` | Prints only `__metadata__`, as JSON, with encoded values expanded |
@@ -47,16 +48,23 @@ ambiguous.
 
 ### Selecting sections
 
-The four section flags combine, and the output always follows the order of the full
-dump regardless of the order they are given in:
+A bare run answers "is this file sound?" — no tensor table, no header. Add what you
+want; the four section flags combine, and the output always follows the order of the
+full dump regardless of the order they are given in:
 
 ```sh
-safetensors-print model.safetensors --summary --issues
+safetensors-print model.safetensors                      # the health check
+safetensors-print model.safetensors --tensors            # just the table
+safetensors-print model.safetensors --issues --header
+safetensors-print model.safetensors --all                # everything
 ```
 
-`--verbose` and `--sort` belong to the tensors output, so they are rejected alongside a
-selection that excludes `--tensors`, rather than being silently ignored. Both are
-accepted when no section is selected, since the full dump prints the tensors.
+`__METADATA__` is the one section with no flag of its own, since `--metadata` prints the
+same content as JSON instead; `--all` is how you get it as part of the dump.
+
+`--verbose` and `--sort` belong to the tensors output, so they are rejected on a run that
+prints no tensor table — including a bare one — rather than being silently ignored. Pair
+them with `--tensors` or `--all`.
 
 ### Reading the metadata
 
@@ -267,9 +275,9 @@ The corpus has three parts:
 | `tests/corpus/third-party/` | Models from other people's tools, fetched by `scripts/fetch-test-corpus.sh`: transformers, a PEFT adapter, sentence-transformers, diffusers, and a 4-bit MLX quantisation |
 | `tests/corpus/local/` | Whatever you put there, symlinks included. Skipped if empty |
 
-`scripts/run-option-matrix.py` runs each file through all 111 combinations of the
-section flags, `--verbose`, `--sort` and the two metadata forms, plus the combinations
-that are meant to be refused, and checks each result:
+`scripts/run-option-matrix.py` runs each file through all 123 combinations of the
+section flags, `--all`, `--verbose`, `--sort` and the two metadata forms, plus the
+combinations that are meant to be refused, and checks each result:
 
 - The exit code matches the file, not the options: every usable combination agrees on 0
   or 1, refused combinations exit 2 writing nothing to stdout, unreadable files exit 3

@@ -11,6 +11,7 @@ from . import __version__
 from .reader import SafetensorsFormatError, read_report
 from .render import (
     ALL_SECTIONS,
+    DEFAULT_SECTIONS,
     SORT_BY_OFFSET,
     SORT_ORDERS,
     Section,
@@ -34,13 +35,15 @@ _SECTION_FLAGS = {
 }
 
 _DESCRIPTION = """\
-Print everything a .safetensors file states about itself: the byte layout, the
+Print what a .safetensors file states about itself: the byte layout, the
 __metadata__ block, every tensor's dtype, shape and size, a map of the data
 buffer accounting for every byte, and the header JSON pretty-printed with
 sorted keys.
 
-With no section selected the whole dump is printed. --summary, --issues,
---tensors and --header select parts of it, and combine.
+With no section selected it prints --summary --issues: how the file is laid
+out, whether it holds together, and what is wrong with it if anything.
+--tensors and --header add the rest, --all prints every section, and they
+combine.
 
 --metadata is the exception: it prints the __metadata__ block on its own as
 JSON a pipeline can consume, expanding values that themselves hold JSON.
@@ -90,6 +93,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="print the HEADER JSON section: the whole header pretty-printed with sorted "
         "keys, with JSON-encoded values expanded and annotated",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="print every section, including __METADATA__, which no flag of its own "
+        "selects. Cannot be combined with the individual section flags",
+    )
 
     metadata_form = parser.add_mutually_exclusive_group()
     metadata_form.add_argument(
@@ -128,11 +137,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def _selected_sections(arguments: argparse.Namespace) -> FrozenSet[Section]:
-    """The sections named on the command line, or every one when none was named."""
+    """The sections to print: every one, those named, or the default pair."""
+    if arguments.all:
+        return ALL_SECTIONS
     selected = frozenset(
         section for flag, section in _SECTION_FLAGS.items() if getattr(arguments, flag)
     )
-    return selected if selected else ALL_SECTIONS
+    return selected if selected else DEFAULT_SECTIONS
 
 
 def _reject_unusable_combinations(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
@@ -142,29 +153,37 @@ def _reject_unusable_combinations(parser: argparse.ArgumentParser, arguments: ar
     effect, which is worse than being told the combination is not one we serve.
     """
     named_sections = ["--" + flag for flag in _SECTION_FLAGS if getattr(arguments, flag)]
+    tensor_options = (["--verbose"] if arguments.verbose else []) + (
+        ["--sort"] if arguments.sort is not None else []
+    )
 
-    if not (arguments.metadata or arguments.metadata_raw):
-        if named_sections and not arguments.tensors:
-            if arguments.verbose:
-                parser.error(
-                    "--verbose adds detail to the tensors output; add --tensors, or select no sections"
+    if arguments.metadata or arguments.metadata_raw:
+        conflicting = named_sections + (["--all"] if arguments.all else []) + tensor_options
+        if conflicting:
+            parser.error(
+                "{} prints the metadata on its own and cannot be combined with {}".format(
+                    "--metadata-raw" if arguments.metadata_raw else "--metadata",
+                    ", ".join(conflicting),
                 )
-            if arguments.sort is not None:
-                parser.error(
-                    "--sort orders the tensors table; add --tensors, or select no sections"
-                )
+            )
         return
 
-    conflicting = named_sections + (["--verbose"] if arguments.verbose else [])
-    if arguments.sort is not None:
-        conflicting.append("--sort")
-    if conflicting:
+    if arguments.all and named_sections:
         parser.error(
-            "{} prints the metadata on its own and cannot be combined with {}".format(
-                "--metadata-raw" if arguments.metadata_raw else "--metadata",
-                ", ".join(conflicting),
-            )
+            "--all already prints every section, so {} adds nothing".format(", ".join(named_sections))
         )
+
+    if Section.TENSORS not in _selected_sections(arguments):
+        if arguments.verbose:
+            parser.error(
+                "--verbose adds detail to the tensors output, which this run does not "
+                "print; add --tensors or --all"
+            )
+        if arguments.sort is not None:
+            parser.error(
+                "--sort orders the tensors table, which this run does not print; "
+                "add --tensors or --all"
+            )
 
 
 def _write_lines(lines: Iterable[str], stream: TextIO) -> None:

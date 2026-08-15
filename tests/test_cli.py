@@ -36,11 +36,30 @@ def file_with_a_gap(tmp_path):
     return write_file(tmp_path, "gap.safetensors", build_file_bytes(header, bytes(8)))
 
 
-def test_default_run_succeeds_and_prints_every_section(valid_file, capsys):
+def test_default_run_answers_whether_the_file_holds_together(valid_file, capsys):
+    """A bare run is the health check: the layout, the checks, and what is wrong."""
     assert main([valid_file]) == EXIT_OK
 
-    output = capsys.readouterr().out
-    for heading in (
+    assert section_titles(capsys.readouterr().out) == [
+        "FILE",
+        "INTEGRITY",
+        "ISSUES",
+        "DTYPE SUMMARY",
+    ]
+
+
+def test_the_default_is_exactly_summary_plus_issues(valid_file, capsys):
+    main([valid_file])
+    default_output = capsys.readouterr().out
+
+    main([valid_file, "--summary", "--issues"])
+    assert capsys.readouterr().out == default_output
+
+
+def test_all_prints_every_section(valid_file, capsys):
+    assert main([valid_file, "--all"]) == EXIT_OK
+
+    assert section_titles(capsys.readouterr().out) == [
         "FILE",
         "INTEGRITY",
         "ISSUES",
@@ -48,12 +67,21 @@ def test_default_run_succeeds_and_prints_every_section(valid_file, capsys):
         "TENSORS",
         "DTYPE SUMMARY",
         "HEADER JSON",
-    ):
-        assert heading in output
+    ]
 
 
-def test_default_run_reports_tensor_details(valid_file, capsys):
-    main([valid_file])
+def test_all_is_the_only_way_to_reach_the_metadata_section(valid_file, capsys):
+    """No flag of its own selects __METADATA__, so --all must not lose it."""
+    for arguments in ([valid_file], [valid_file, "--summary", "--issues", "--tensors", "--header"]):
+        main(arguments)
+        assert "__METADATA__" not in section_titles(capsys.readouterr().out)
+
+    main([valid_file, "--all"])
+    assert "__METADATA__" in section_titles(capsys.readouterr().out)
+
+
+def test_all_reports_tensor_details(valid_file, capsys):
+    main([valid_file, "--all"])
 
     output = capsys.readouterr().out
     assert "weight" in output
@@ -62,8 +90,8 @@ def test_default_run_reports_tensor_details(valid_file, capsys):
     assert "IEEE 754 single precision" in output
 
 
-def test_default_run_embeds_the_header_with_sorted_keys(valid_file, capsys):
-    main([valid_file])
+def test_all_embeds_the_header_with_sorted_keys(valid_file, capsys):
+    main([valid_file, "--all"])
 
     header_section = capsys.readouterr().out.split("HEADER JSON")[1]
     assert '"weight"' in header_section
@@ -85,7 +113,7 @@ def test_header_section_sorts_keys(tmp_path, capsys):
 
 
 def test_verbose_adds_decoded_values_and_hex_dumps(valid_file, capsys):
-    assert main([valid_file, "--verbose"]) == EXIT_OK
+    assert main([valid_file, "--tensors", "--verbose"]) == EXIT_OK
 
     output = capsys.readouterr().out
     assert "first elements" in output
@@ -97,7 +125,7 @@ def test_verbose_adds_decoded_values_and_hex_dumps(valid_file, capsys):
 
 def test_metadata_is_rendered_as_json_with_encoded_values_decoded(valid_file, capsys):
     """A JSON-encoded metadata value is expanded in place, not printed as one escaped line."""
-    main([valid_file])
+    main([valid_file, "--all"])
 
     output = capsys.readouterr().out
     metadata_section = output.split("__METADATA__")[1].split("TENSORS")[0]
@@ -110,13 +138,13 @@ def test_metadata_is_rendered_as_json_with_encoded_values_decoded(valid_file, ca
 
 
 def test_metadata_json_rendering_does_not_need_verbose(valid_file, capsys):
-    main([valid_file])
-    default_output = capsys.readouterr().out
+    main([valid_file, "--all"])
+    plain_output = capsys.readouterr().out
 
-    main([valid_file, "--verbose"])
+    main([valid_file, "--all", "--verbose"])
     verbose_output = capsys.readouterr().out
 
-    assert "shown decoded" in default_output
+    assert "shown decoded" in plain_output
     assert "shown decoded" in verbose_output
 
 
@@ -128,7 +156,7 @@ def test_metadata_scalar_strings_are_not_turned_into_numbers(tmp_path, capsys):
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
 
-    main([path])
+    main([path, "--all"])
 
     assert '"training_step": "5000"' in capsys.readouterr().out
 
@@ -142,19 +170,25 @@ def test_no_metadata_line_wraps_beyond_the_rule_width(tmp_path, capsys):
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
 
-    main([path])
+    main([path, "--all"])
 
     metadata_lines = capsys.readouterr().out.split("__METADATA__")[1].split("TENSORS")[0]
     assert max(len(line) for line in metadata_lines.splitlines()) <= RULE_WIDTH
 
 
 def test_specification_violation_sets_exit_code_one_but_still_prints(file_with_a_gap, capsys):
-    assert main([file_with_a_gap]) == EXIT_SPECIFICATION_VIOLATIONS
+    assert main([file_with_a_gap, "--all"]) == EXIT_SPECIFICATION_VIOLATIONS
 
     output = capsys.readouterr().out
     assert "claimed by no tensor" in output
     assert "-- unclaimed gap --" in output
     assert "HEADER JSON" in output
+
+
+def test_a_default_run_still_reports_the_violation(file_with_a_gap, capsys):
+    """The health check must name the fault even though it prints no tensor table."""
+    assert main([file_with_a_gap]) == EXIT_SPECIFICATION_VIOLATIONS
+    assert "claimed by no tensor" in capsys.readouterr().out
 
 
 def test_unsorted_offsets_alone_do_not_fail_the_run(tmp_path, capsys):
@@ -176,7 +210,7 @@ def test_unknown_dtype_is_counted_separately_from_agreement(tmp_path, capsys):
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(17)))
 
-    assert main([path]) == EXIT_SPECIFICATION_VIOLATIONS
+    assert main([path, "--all"]) == EXIT_SPECIFICATION_VIOLATIONS
 
     output = capsys.readouterr().out
     assert "1 agree, 1 undeterminable" in output
@@ -250,7 +284,7 @@ def test_tensors_are_listed_once_in_offset_order_by_default(tmp_path, capsys):
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(2)))
 
-    assert main([path]) == EXIT_OK
+    assert main([path, "--all"]) == EXIT_OK
 
     output = capsys.readouterr().out
     table = output.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
@@ -267,7 +301,7 @@ def test_sort_by_name_reorders_the_same_single_table(tmp_path, capsys):
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(2)))
 
-    assert main([path, "--sort", "name"]) == EXIT_OK
+    assert main([path, "--all", "--sort", "name"]) == EXIT_OK
 
     output = capsys.readouterr().out
     table = output.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
@@ -283,7 +317,7 @@ def test_offsets_are_two_columns_rather_than_a_joined_range(tmp_path, capsys):
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, bytes(4)))
 
-    main([path])
+    main([path, "--all"])
 
     table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
     heading = next(line for line in table.splitlines() if "OFFSET_BEGIN" in line)
@@ -305,7 +339,7 @@ def test_a_table_with_no_rows_says_so_rather_than_printing_a_bare_heading(tmp_pa
 
 
 def test_a_gap_row_fills_both_offset_columns(file_with_a_gap, capsys):
-    main([file_with_a_gap])
+    main([file_with_a_gap, "--all"])
 
     table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
     gap_row = next(line for line in table.splitlines() if "unclaimed gap" in line)
@@ -313,10 +347,10 @@ def test_a_gap_row_fills_both_offset_columns(file_with_a_gap, capsys):
 
 
 def test_gaps_appear_in_place_only_when_ordered_by_offset(file_with_a_gap, capsys):
-    main([file_with_a_gap])
+    main([file_with_a_gap, "--all"])
     offset_table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
 
-    main([file_with_a_gap, "--sort", "name"])
+    main([file_with_a_gap, "--all", "--sort", "name"])
     name_table = capsys.readouterr().out.split("TENSORS")[1].split("DTYPE SUMMARY")[0]
 
     assert "-- unclaimed gap --" in offset_table
@@ -325,16 +359,16 @@ def test_gaps_appear_in_place_only_when_ordered_by_offset(file_with_a_gap, capsy
 
 def test_invalid_sort_order_is_a_usage_error(valid_file, capsys):
     with pytest.raises(SystemExit) as raised:
-        main([valid_file, "--sort", "sideways"])
+        main([valid_file, "--tensors", "--sort", "sideways"])
 
     assert raised.value.code == EXIT_USAGE
 
 
-def test_verbose_detail_section_is_absent_by_default(valid_file, capsys):
-    main([valid_file])
+def test_verbose_detail_section_is_absent_unless_asked_for(valid_file, capsys):
+    main([valid_file, "--all"])
     assert "TENSOR DETAIL" not in capsys.readouterr().out
 
-    main([valid_file, "--verbose"])
+    main([valid_file, "--all", "--verbose"])
     assert "TENSOR DETAIL" in capsys.readouterr().out
 
 
@@ -438,7 +472,7 @@ def test_the_metadata_section_does_not_call_a_malformed_declaration_empty(tmp_pa
     header = {"__metadata__": [1, 2, 3], "w": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}}
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
 
-    main([path])
+    main([path, "--all"])
 
     metadata_section = capsys.readouterr().out.split("__METADATA__")[1].split("TENSORS")[0]
     assert "is not a JSON object" in metadata_section
@@ -454,7 +488,7 @@ def test_the_two_metadata_forms_are_mutually_exclusive(valid_file, capsys):
 
 
 @pytest.mark.parametrize("form", ["--metadata", "--metadata-raw"])
-@pytest.mark.parametrize("conflicting", ["--verbose", "--tensors", "--summary", "--header"])
+@pytest.mark.parametrize("conflicting", ["--verbose", "--tensors", "--summary", "--header", "--all"])
 def test_metadata_cannot_be_combined_with_sections(valid_file, capsys, form, conflicting):
     with pytest.raises(SystemExit) as raised:
         main([valid_file, form, conflicting])
@@ -501,7 +535,7 @@ def test_a_forged_marker_does_not_stop_the_dump_expanding_real_values(tmp_path, 
     }
     path = write_file(tmp_path, "m.safetensors", build_file_bytes(header, b"\x00"))
 
-    assert main([path]) == EXIT_OK
+    assert main([path, "--all"]) == EXIT_OK
 
     metadata_section = capsys.readouterr().out.split("__METADATA__")[1].split("TENSORS")[0]
     assert "shown decoded" in metadata_section
@@ -510,7 +544,7 @@ def test_a_forged_marker_does_not_stop_the_dump_expanding_real_values(tmp_path, 
 
 def test_the_annotating_comment_belongs_to_the_dump_only(valid_file, capsys):
     """The dump is prose and can say how a value is stored; the JSON output cannot."""
-    main([valid_file])
+    main([valid_file, "--all"])
     assert "shown decoded" in capsys.readouterr().out
 
     main([valid_file, "--metadata"])
@@ -570,17 +604,14 @@ def test_combined_sections_keep_the_order_of_the_full_dump(valid_file, capsys):
     ]
 
 
-def test_no_section_flag_prints_every_section(valid_file, capsys):
+def test_no_section_flag_prints_the_summary_and_the_issues(valid_file, capsys):
     main([valid_file])
 
     assert section_titles(capsys.readouterr().out) == [
         "FILE",
         "INTEGRITY",
         "ISSUES",
-        "__METADATA__",
-        "TENSORS",
         "DTYPE SUMMARY",
-        "HEADER JSON",
     ]
 
 
@@ -600,6 +631,32 @@ def test_verbose_is_rejected_when_the_tensors_are_not_selected(valid_file, capsy
     assert "--verbose adds detail to the tensors output" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("tensor_option", [["--verbose"], ["--sort", "name"]])
+def test_the_tensor_options_are_rejected_on_a_bare_run(valid_file, capsys, tensor_option):
+    """The default prints no tensor table, so these would quietly do nothing."""
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file] + tensor_option)
+
+    assert raised.value.code == EXIT_USAGE
+    assert "add --tensors or --all" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("section", ["--summary", "--issues", "--tensors", "--header"])
+def test_all_refuses_the_section_flags_it_already_covers(valid_file, capsys, section):
+    with pytest.raises(SystemExit) as raised:
+        main([valid_file, "--all", section])
+
+    assert raised.value.code == EXIT_USAGE
+    assert "already prints every section" in capsys.readouterr().err
+
+
+def test_all_accepts_the_tensor_options(valid_file, capsys):
+    assert main([valid_file, "--all", "--verbose", "--sort", "name"]) == EXIT_OK
+
+    titles = section_titles(capsys.readouterr().out)
+    assert "TENSOR DETAIL" in titles
+
+
 def test_sort_is_rejected_when_the_tensors_are_not_selected(valid_file, capsys):
     with pytest.raises(SystemExit) as raised:
         main([valid_file, "--summary", "--sort", "name"])
@@ -608,10 +665,11 @@ def test_sort_is_rejected_when_the_tensors_are_not_selected(valid_file, capsys):
     assert "--sort orders the tensors table" in capsys.readouterr().err
 
 
-def test_sort_is_accepted_with_the_tensors_and_with_no_selection(valid_file, capsys):
+def test_sort_is_accepted_wherever_the_tensors_are_printed(valid_file, capsys):
     assert main([valid_file, "--tensors", "--sort", "name"]) == EXIT_OK
-    capsys.readouterr()
-    assert main([valid_file, "--sort", "name"]) == EXIT_OK
+    assert "ordered by name" in capsys.readouterr().out
+
+    assert main([valid_file, "--all", "--sort", "name"]) == EXIT_OK
     assert "ordered by name" in capsys.readouterr().out
 
 

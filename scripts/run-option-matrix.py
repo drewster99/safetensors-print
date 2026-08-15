@@ -29,6 +29,7 @@ import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 SECTION_FLAGS = ["--summary", "--issues", "--tensors", "--header"]
+DEFAULT_SECTIONS = ["--summary", "--issues"]
 SORT_VALUES = [None, "offset", "name"]
 METADATA_FORMS = ["--metadata", "--metadata-raw"]
 
@@ -59,18 +60,36 @@ def option_cases() -> List[List[str]]:
                     arguments += ["--sort", sort]
                 cases.append(arguments)
 
+    for verbose in (False, True):
+        for sort in SORT_VALUES:
+            arguments = ["--all"] + (["--verbose"] if verbose else [])
+            if sort is not None:
+                arguments += ["--sort", sort]
+            cases.append(arguments)
+    for section in SECTION_FLAGS:
+        cases.append(["--all", section])
+
     for form in METADATA_FORMS:
         cases.append([form])
-        for conflicting in SECTION_FLAGS + ["--verbose"]:
+        for conflicting in SECTION_FLAGS + ["--all", "--verbose"]:
             cases.append([form, conflicting])
         cases.append([form, "--sort", "name"])
     cases.append(list(METADATA_FORMS))
     return cases
 
 
+def selected_sections(arguments: Sequence[str]) -> List[str]:
+    """Which sections a run prints, restated independently of the tool."""
+    if "--all" in arguments:
+        return list(SECTION_FLAGS)
+    named = [flag for flag in SECTION_FLAGS if flag in arguments]
+    return named if named else list(DEFAULT_SECTIONS)
+
+
 def is_usage_error(arguments: Sequence[str]) -> bool:
     """The rules for refusing a combination, restated independently of the tool."""
-    sections = [flag for flag in SECTION_FLAGS if flag in arguments]
+    named = [flag for flag in SECTION_FLAGS if flag in arguments]
+    everything = "--all" in arguments
     verbose = "--verbose" in arguments
     sorted_ = "--sort" in arguments
     metadata_forms = [form for form in METADATA_FORMS if form in arguments]
@@ -78,17 +97,18 @@ def is_usage_error(arguments: Sequence[str]) -> bool:
     if len(metadata_forms) > 1:
         return True
     if metadata_forms:
-        return bool(sections) or verbose or sorted_
-    if sections and "--tensors" not in sections:
+        return bool(named) or everything or verbose or sorted_
+    if everything and named:
+        return True
+    if "--tensors" not in selected_sections(arguments):
         return verbose or sorted_
     return False
 
 
 def expected_section_titles(arguments: Sequence[str]) -> List[str]:
     """The titles the dump should print, in the order the full dump uses."""
-    selected = [flag for flag in SECTION_FLAGS if flag in arguments]
-    chosen = set(selected) if selected else set(SECTION_FLAGS)
-    everything = not selected
+    chosen = set(selected_sections(arguments))
+    everything = "--all" in arguments
 
     titles = []
     if "--summary" in chosen:
