@@ -10,7 +10,17 @@ No third-party dependencies. It never loads tensor data into memory, so it opens
 ## Install
 
 ```sh
+uv tool install safetensors-print     # or: pipx install safetensors-print
 pip install safetensors-print
+brew install drewster99/tap/safetensors-print
+```
+
+Or download `safetensors-print-<version>.pyz` from the [releases][releases] and run it
+as it is — one file, no install, any Python 3.9 or later:
+
+```sh
+chmod +x safetensors-print-0.1.0.pyz
+./safetensors-print-0.1.0.pyz model.safetensors
 ```
 
 Or run it straight from a checkout:
@@ -313,17 +323,48 @@ failed, because that judgement is what the exit code means and it should be deli
 
 ## Releasing
 
-Publishing to PyPI runs from `.github/workflows/publish.yml` using trusted publishing,
-so no API token is stored here. It needs a one-time pending publisher configured on
-PyPI (owner `drewster99`, repository `safetensors-print`, workflow `publish.yml`,
-environment `pypi`).
+```sh
+./release.sh --dry-run          # build and verify everything, publish nothing
+./release.sh                    # bump the patch version and publish
+./release.sh --version 1.0.0    # publish a version you choose
+```
 
-After that, a release is: bump `__version__` in `src/safetensors_print/__init__.py`,
-tag `vX.Y.Z`, and publish a GitHub release. The workflow runs the suite on 3.9 and
-3.13, builds, verifies the tag matches the packaged version, and uploads.
+The script runs the unit suite and the whole option matrix, bumps `__version__`, builds
+the sdist, the wheel and the zipapp, installs the wheel into a throwaway venv, and
+checks that both artifacts run *and keep their exit codes* before anything is published.
+Then it commits, tags `vX.Y.Z`, pushes, creates the GitHub release with all three assets
+attached, and verifies the release and its assets exist.
+
+It refuses to start on a dirty tree, off `main`, behind `origin`, or on a version whose
+tag or release already exists.
+
+**PyPI** publishes itself: `.github/workflows/publish.yml` runs on the published
+release, using trusted publishing, so no API token is stored anywhere. It needs a
+one-time pending publisher configured on PyPI (owner `drewster99`, repository
+`safetensors-print`, workflow `publish.yml`, environment `pypi`).
+
+**Homebrew** is one manual step. Each release writes `build/release/safetensors-print.rb`
+pinned to that release's sdist and digest, and prints the commands to publish it to the
+tap. Creating the tap, once ever:
+
+```sh
+gh repo create drewster99/homebrew-tap --public -d "Homebrew formulae"
+```
+
+After that, each release is a copy, a commit and a push into that repo. Users install
+with `brew install drewster99/tap/safetensors-print`. A bare `brew install
+safetensors-print` would require the formula to be in homebrew-core, which has a
+notability bar (roughly 30 forks, 30 watchers, or 75 stars) a new repository will not
+meet; the same formula works there later with `url` pointed at the PyPI sdist.
+
+Nothing here needs codesigning or notarization. The wheel and the zipapp contain no
+Mach-O binaries — Homebrew installs a script with a shebang into a virtualenv it builds
+itself, and Homebrew's downloads are never quarantined. Gatekeeper only has an opinion
+about compiled executables, app bundles and disk images, none of which this ships.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
 [spec]: https://github.com/huggingface/safetensors#format
+[releases]: https://github.com/drewster99/safetensors-print/releases

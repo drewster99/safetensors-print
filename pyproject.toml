@@ -36,7 +36,7 @@ Issues = "https://github.com/drewster99/safetensors-print/issues"
 safetensors-print = "safetensors_print.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "build>=1", "twine>=5"]
 # For scripts/compare-with-reference.py only: the tool itself has no dependencies, and
 # nothing under src/ may import these.
 reference = ["safetensors>=0.4", "numpy"]
