@@ -9,25 +9,62 @@ No third-party dependencies. It never loads tensor data into memory, so it opens
 
 ## Install
 
+Any one of these. They all give you the same `safetensors-print` command.
+
+**Homebrew** — brings its own Python, so it needs nothing else installed:
+
 ```sh
-uv tool install safetensors-print     # or: pipx install safetensors-print
-pip install safetensors-print
 brew install drewster99/tap/safetensors-print
 ```
 
-Or download `safetensors-print-<version>.pyz` from the [releases][releases] and run it
-as it is — one file, no install, any Python 3.9 or later:
+**As a tool, on its own Python** — needs [uv][uv] or [pipx][pipx]:
 
 ```sh
-chmod +x safetensors-print-0.1.0.pyz
-./safetensors-print-0.1.0.pyz model.safetensors
+uv tool install safetensors-print
+pipx install safetensors-print
 ```
 
-Or run it straight from a checkout:
+**Into a Python you already have** — needs Python 3.9 or later:
 
 ```sh
+pip install safetensors-print
+```
+
+**One file, nothing installed** — download `safetensors-print-<version>.pyz` from the
+[latest release][releases]. It runs on any Python 3.9 or later:
+
+```sh
+chmod +x safetensors-print-*.pyz
+./safetensors-print-*.pyz model.safetensors
+```
+
+Check it worked:
+
+```sh
+safetensors-print --version
+```
+
+### Upgrading and removing
+
+```sh
+brew upgrade safetensors-print          # or: uv tool upgrade / pipx upgrade / pip install -U
+brew uninstall safetensors-print        # or: uv tool uninstall / pipx uninstall / pip uninstall
+```
+
+`brew tap drewster99/tap` first if you would rather write `brew install safetensors-print`
+without the prefix. The tap is a small public repository of formulae; it is what the
+qualified name above taps implicitly.
+
+### From a checkout
+
+```sh
+git clone https://github.com/drewster99/safetensors-print.git
+cd safetensors-print
 python3 -m safetensors_print model.safetensors
 ```
+
+No installation step and nothing to build: the package has no dependencies, so the
+checkout runs as it is on any Python 3.9 or later.
 
 ## Usage
 
@@ -377,4 +414,6 @@ about compiled executables, app bundles and disk images, none of which this ship
 MIT — see [LICENSE](LICENSE).
 
 [spec]: https://github.com/huggingface/safetensors#format
-[releases]: https://github.com/drewster99/safetensors-print/releases
+[releases]: https://github.com/drewster99/safetensors-print/releases/latest
+[uv]: https://docs.astral.sh/uv/
+[pipx]: https://pipx.pypa.io/
